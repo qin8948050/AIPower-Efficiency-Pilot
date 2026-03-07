@@ -65,3 +65,26 @@ func (r *RedisClient) GetNodePoolID(nodeName string) (string, error) {
 	}
 	return val, err
 }
+
+// UpdatePodMetrics 更新 Redis 中的 Pod 指标部分
+func (r *RedisClient) UpdatePodMetrics(namespace, podName string, metrics *types.GPUMetrics) error {
+	key := fmt.Sprintf("pod_trace:%s:%s", namespace, podName)
+
+	val, err := r.client.Get(r.ctx, key).Result()
+	if err != nil {
+		return err
+	}
+
+	var trace types.PodTrace
+	if err := json.Unmarshal([]byte(val), &trace); err != nil {
+		return err
+	}
+
+	trace.Metrics = metrics
+	data, err := json.Marshal(trace)
+	if err != nil {
+		return err
+	}
+
+	return r.client.Set(r.ctx, key, data, 24*time.Hour).Err()
+}

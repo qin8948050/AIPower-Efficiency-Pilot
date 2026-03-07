@@ -6,11 +6,11 @@
 
 ## 🟢 第一阶段：全维感知与资源池打标 (Perception & Identity)
 - [x] **工程骨架初始化**：建立 Go (Backend) 与 Next.js (Frontend) 基础环境。
-- [ ] **池化采集器 (Pool-Collector) 开发**：
-    - [ ] 基于 `client-go` 实现 Pod 与资源池 (Pool-ID) 的动态自动关联。
-    - [ ] 对接 Prometheus 实现 5 分钟级 GPU 实时指标探测（显存、算力、特性）。
-- [ ] **实时状态缓冲区**：
-    - [ ] 配置 Redis 存储 5 分钟级能效快照，支撑 Dashboard 实时渲染。
+- [x] **池化采集器 (Pool-Collector) 开发**：
+    - [x] 基于 `client-go` 实现 Pod 与资源池 (Pool-ID) 的动态自动关联。
+    - [x] 对接 Prometheus 实现 5 分钟级 GPU 实时指标探测（显存、算力、特性）。
+- [x] **实时状态缓冲区**：
+    - [x] 配置 Redis 存储 5 分钟级能效快照，支撑 Dashboard 实时渲染。
 
 ## 🟡 第二阶段：池化定价与聚合引擎 (Billing & Consolidation)
 - [ ] **资源池定价引擎实现**：

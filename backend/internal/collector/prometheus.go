@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
+	"github.com/qxw/aipower-efficiency-pilot/internal/types"
 )
 
 type PrometheusCollector struct {
@@ -50,34 +52,62 @@ func (p *PrometheusCollector) Start(ctx context.Context, interval time.Duration)
 }
 
 func (p *PrometheusCollector) fetchAndCacheMetrics(ctx context.Context) {
-	// 查询 GPU 利用率，假设使用的指标名为 DCGM_FI_DEV_GPU_UTIL
-	query := `DCGM_FI_DEV_GPU_UTIL`
-
-	result, warnings, err := p.api.Query(ctx, query, time.Now())
-	if err != nil {
-		log.Printf("Failed to query Prometheus: %v", err)
-		return
-	}
-	if len(warnings) > 0 {
-		log.Printf("Prometheus queries warnings: %v", warnings)
+	// 定义核心指标查询
+	queries := map[string]string{
+		"gpu_util_avg": `avg by (pod, namespace) (DCGM_FI_DEV_GPU_UTIL)`,
+		"gpu_util_max": `max by (pod, namespace) (DCGM_FI_DEV_GPU_UTIL)`,
+		"mem_used":     `sum by (pod, namespace) (DCGM_FI_DEV_FB_USED * 1024 * 1024)`,
+		"mem_total":    `sum by (pod, namespace) (DCGM_FI_DEV_FB_FREE + DCGM_FI_DEV_FB_USED) * 1024 * 1024`,
+		"power_usage":  `avg by (pod, namespace) (DCGM_FI_DEV_POWER_USAGE)`,
 	}
 
-	// 这里可以后续结合 PodTrace 中保存的具体 Namespace/Pod 过滤数据
-	// 或者直接在 Prometheus 侧查出带有 pod 标签的指标 (取决于 DCGM Exporter 的配置)
-	switch value := result.(type) {
-	case model.Vector:
-		for _, s := range value {
-			pod := string(s.Metric["pod"])
-			namespace := string(s.Metric["namespace"])
-			if pod == "" || namespace == "" {
-				continue
-			}
-			util := float64(s.Value)
+	podMetricsMap := make(map[string]*types.GPUMetrics)
 
-			// 可以将获取到的利用率更新至 Redis，为看板提供实时展现
-			key := fmt.Sprintf("pod_metrics:%s:%s", namespace, pod)
-			// TODO: 可以存储为结构体并聚合
-			p.redis.SaveNodePoolID(key, fmt.Sprintf("%.2f%%", util)) // 这里权宜使用同一方法存字符串
+	for name, query := range queries {
+		result, _, err := p.api.Query(ctx, query, time.Now())
+		if err != nil {
+			log.Printf("Failed to query Prometheus for %s: %v", name, err)
+			continue
 		}
+
+		if vec, ok := result.(model.Vector); ok {
+			for _, s := range vec {
+				pod := string(s.Metric["pod"])
+				ns := string(s.Metric["namespace"])
+				if pod == "" || ns == "" {
+					continue
+				}
+				key := fmt.Sprintf("%s/%s", ns, pod)
+				if _, exists := podMetricsMap[key]; !exists {
+					podMetricsMap[key] = &types.GPUMetrics{LastUpdate: time.Now()}
+				}
+
+				val := float64(s.Value)
+				switch name {
+				case "gpu_util_avg":
+					podMetricsMap[key].GPUUtilAvg = val
+				case "gpu_util_max":
+					podMetricsMap[key].GPUUtilMax = val
+				case "mem_used":
+					podMetricsMap[key].MemUsedBytes = uint64(val)
+				case "mem_total":
+					podMetricsMap[key].MemTotalBytes = uint64(val)
+				case "power_usage":
+					podMetricsMap[key].PowerUsageW = val
+				}
+			}
+		}
+	}
+
+	// 同步至 Redis
+	for key, metrics := range podMetricsMap {
+		parts := strings.Split(key, "/")
+		ns, pod := parts[0], parts[1]
+		if err := p.redis.UpdatePodMetrics(ns, pod, metrics); err != nil {
+			// 如果 PodTrace 还未同步到 Redis，该错误可忽略
+			continue
+		}
+		log.Printf("Updated metrics snapshot for %s: UtilAvg=%.2f%%, MemUsed=%dMB",
+			key, metrics.GPUUtilAvg, metrics.MemUsedBytes/1024/1024)
 	}
 }

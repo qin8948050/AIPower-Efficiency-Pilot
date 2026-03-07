@@ -146,7 +146,11 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 	hasGPU := false
 	for _, container := range pod.Spec.Containers {
 		for resourceName := range container.Resources.Limits {
-			if strings.HasPrefix(string(resourceName), "nvidia.com/gpu") || strings.HasPrefix(string(resourceName), "nvidia.com/mig") {
+			rn := string(resourceName)
+			if strings.HasPrefix(rn, "nvidia.com/gpu") ||
+				strings.HasPrefix(rn, "nvidia.com/mig") ||
+				strings.Contains(rn, "vcuda") ||
+				strings.Contains(rn, "gpu-core") {
 				hasGPU = true
 				break
 			}
@@ -170,7 +174,10 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 	// 2. 识别切分模式
 	slicingMode := c.detectSlicingMode(pod)
 
-	// 3. 构建 Trace 实体
+	// 3. 提取 GPU 设备信息
+	gpus := c.extractGPUInfo(pod)
+
+	// 4. 构建 Trace 实体
 	trace := &types.PodTrace{
 		Namespace:   pod.Namespace,
 		PodName:     pod.Name,
@@ -178,6 +185,7 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 		NodeName:    pod.Spec.NodeName,
 		PoolID:      poolID,
 		SlicingMode: slicingMode,
+		GPUs:        gpus,
 		StartTime:   pod.CreationTimestamp.Time,
 		Labels:      pod.Labels,
 	}
@@ -185,37 +193,55 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 	if err := c.redis.SavePodTrace(trace); err != nil {
 		log.Printf("Error caching Pod Trace %s/%s: %v", trace.Namespace, trace.PodName, err)
 	} else {
-		log.Printf("Pod %s/%s scheduled on %s (%s, Mode: %s)", trace.Namespace, trace.PodName, trace.NodeName, trace.PoolID, trace.SlicingMode)
+		log.Printf("Pod %s/%s scheduled on %s (%s, Mode: %s, GPUs: %v)",
+			trace.Namespace, trace.PodName, trace.NodeName, trace.PoolID, trace.SlicingMode, trace.GPUs)
 	}
 }
 
-// detectSlicingMode 基于正则表达式和环境变量识别虚拟化模式
-func (c *K8sCollector) detectSlicingMode(pod *v1.Pod) types.SlicingMode {
-	// 简单的探针策略
+// extractGPUInfo 提取分配给 Pod 的 GPU 标识
+func (c *K8sCollector) extractGPUInfo(pod *v1.Pod) []string {
+	var gpus []string
+	// 1. 尝试环境变量 NVIDIA_VISIBLE_DEVICES
 	for _, container := range pod.Spec.Containers {
-		// 1. 是否申请了 MIG
-		for resName := range container.Resources.Requests {
+		for _, env := range container.Env {
+			if env.Name == "NVIDIA_VISIBLE_DEVICES" && env.Value != "" && env.Value != "all" && env.Value != "none" {
+				gpus = append(gpus, strings.Split(env.Value, ",")...)
+			}
+		}
+	}
+
+	// 2. 尝试常见注解 (例如 Volcano/TKE)
+	if val, ok := pod.Annotations["nvidia.com/gpu-uuid"]; ok {
+		gpus = append(gpus, strings.Split(val, ",")...)
+	}
+	if val, ok := pod.Annotations["tke.cloud.tencent.com/gpu-assigned-ids"]; ok {
+		gpus = append(gpus, strings.Split(val, ",")...)
+	}
+	return gpus
+}
+
+// detectSlicingMode 基于资源申请和环境变量探测虚拟化模式
+func (c *K8sCollector) detectSlicingMode(pod *v1.Pod) types.SlicingMode {
+	for _, container := range pod.Spec.Containers {
+		// 1. MIG 探测 (通过资源名)
+		for resName := range container.Resources.Limits {
 			if strings.HasPrefix(string(resName), "nvidia.com/mig-") {
 				return types.SlicingModeMIG
 			}
 		}
-		// 2. 是否注入了 MPS 变量
+		// 2. MPS 探测 (通过环境变量)
 		for _, env := range container.Env {
-			if env.Name == "CUDA_MPS_PIPE_DIRECTORY" {
+			if env.Name == "CUDA_MPS_PIPE_DIRECTORY" || env.Name == "NVIDIA_MPS_COPY_THRESHOLD" {
 				return types.SlicingModeMPS
 			}
 		}
-	}
-
-	// 3. 检查是否有 TS (Time Slicing - 超分) 的标签或特定资源名
-	// 例如 TKE 可能会使用 tencent.com/vcuda-core
-	for _, container := range pod.Spec.Containers {
-		for resName := range container.Resources.Requests {
-			if strings.Contains(string(resName), "vcuda") || strings.Contains(string(resName), "gpu-core") {
+		// 3. TS (Time Slicing/vGPU) 探测
+		for resName := range container.Resources.Limits {
+			rn := string(resName)
+			if strings.Contains(rn, "vcuda") || strings.Contains(rn, "gpu-core") || strings.Contains(rn, "gpu-percentage") {
 				return types.SlicingModeTS
 			}
 		}
 	}
-
 	return types.SlicingModeFull
 }
