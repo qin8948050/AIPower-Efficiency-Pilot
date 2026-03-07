@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aipower-efficiency-pilot-backend
+  namespace: finops
+  labels:
+    app: aipower-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aipower-backend
+  template:
+    metadata:
+      labels:
+        app: aipower-backend
+    spec:
+      serviceAccountName: aipower-collector-sa
+      containers:
+        - name: backend
+          image: aipower-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: REDIS_HOST
+              value: "redis-master.finops.svc.cluster.local:6379"
+            - name: MYSQL_DSN
+              value: "finops:password@tcp(mysql.finops.svc.cluster.local:3306)/finops_db?charset=utf8mb4&parseTime=True&loc=Local"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-server.monitoring.svc.cluster.local:9090"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aipower-backend-svc
+  namespace: finops
+spec:
+  selector:
+    app: aipower-backend
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
