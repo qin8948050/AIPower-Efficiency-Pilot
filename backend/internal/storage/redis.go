@@ -88,3 +88,20 @@ func (r *RedisClient) UpdatePodMetrics(namespace, podName string, metrics *types
 
 	return r.client.Set(r.ctx, key, data, 24*time.Hour).Err()
 }
+
+func (r *RedisClient) GetPodTrace(namespace, podName string) (*types.PodTrace, error) {
+	key := fmt.Sprintf("pod_trace:%s:%s", namespace, podName)
+	val, err := r.client.Get(r.ctx, key).Result()
+	if err == redis.Nil {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var trace types.PodTrace
+	if err := json.Unmarshal([]byte(val), &trace); err != nil {
+		return nil, err
+	}
+	return &trace, nil
+}

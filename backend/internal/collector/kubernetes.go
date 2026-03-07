@@ -21,10 +21,11 @@ import (
 type K8sCollector struct {
 	client *kubernetes.Clientset
 	redis  *storage.RedisClient
+	mysql  *storage.MySQLClient
 }
 
 // NewK8sCollector 初始化 K8s 采集器
-func NewK8sCollector(kubeconfig string, redisCli *storage.RedisClient) (*K8sCollector, error) {
+func NewK8sCollector(kubeconfig string, redisCli *storage.RedisClient, mysqlCli *storage.MySQLClient) (*K8sCollector, error) {
 	var config *rest.Config
 	var err error
 
@@ -46,6 +47,7 @@ func NewK8sCollector(kubeconfig string, redisCli *storage.RedisClient) (*K8sColl
 	return &K8sCollector{
 		client: clientset,
 		redis:  redisCli,
+		mysql:  mysqlCli,
 	}, nil
 }
 
@@ -133,11 +135,17 @@ func (c *K8sCollector) handlePodUpdate(oldPod, newPod *v1.Pod) {
 }
 
 func (c *K8sCollector) handlePodDelete(pod *v1.Pod) {
+	// 1. 删除 Redis 实时快照
 	err := c.redis.DeletePodTrace(pod.Namespace, pod.Name)
 	if err != nil {
 		log.Printf("Failed to delete pod trace %s/%s: %v", pod.Namespace, pod.Name, err)
 	} else {
 		log.Printf("Pod Deleted, removed from trace: %s/%s", pod.Namespace, pod.Name)
+	}
+
+	// 2. 关闭 MySQL 审计记录 (Life-Trace)
+	if err := c.mysql.CloseLifeTrace(pod.Namespace, pod.Name); err != nil {
+		log.Printf("Failed to close MySQL life-trace for %s/%s: %v", pod.Namespace, pod.Name, err)
 	}
 }
 
@@ -195,6 +203,11 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 	} else {
 		log.Printf("Pod %s/%s scheduled on %s (%s, Mode: %s, GPUs: %v)",
 			trace.Namespace, trace.PodName, trace.NodeName, trace.PoolID, trace.SlicingMode, trace.GPUs)
+	}
+
+	// 4. 持久化 MySQL 审计记录 (Life-Trace)
+	if err := c.mysql.SaveLifeTrace(trace); err != nil {
+		log.Printf("Failed to save MySQL life-trace for %s/%s: %v", trace.Namespace, trace.PodName, err)
 	}
 }
 

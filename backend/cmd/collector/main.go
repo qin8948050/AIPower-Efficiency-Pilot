@@ -17,12 +17,14 @@ var (
 	kubeconfig    string
 	redisAddr     string
 	prometheusURL string
+	mysqlDSN      string
 )
 
 func init() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
 	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis server address")
 	flag.StringVar(&prometheusURL, "prometheus-url", "http://localhost:9090", "Prometheus server URL")
+	flag.StringVar(&mysqlDSN, "mysql-dsn", "root:password@tcp(localhost:3306)/aipower?parseTime=true", "MySQL DSN")
 	flag.Parse()
 }
 
@@ -39,8 +41,15 @@ func main() {
 	}
 	log.Println("Connected to Redis successfully.")
 
+	// 1.5 初始化 MySQL
+	mysqlCli, err := storage.NewMySQLClient(mysqlDSN)
+	if err != nil {
+		log.Fatalf("Failed to initialize MySQL: %v", err)
+	}
+	log.Println("Connected to MySQL successfully.")
+
 	// 2. 初始化 K8s Collector
-	k8sColl, err := collector.NewK8sCollector(kubeconfig, redisCli)
+	k8sColl, err := collector.NewK8sCollector(kubeconfig, redisCli, mysqlCli)
 	if err != nil {
 		log.Fatalf("Failed to initialize K8s Collector: %v", err)
 	}
