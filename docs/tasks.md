@@ -9,6 +9,7 @@
 - [x] **池化采集器 (Pool-Collector) 开发**：
     - [x] 基于 `client-go` 实现 Pod 与资源池 (Pool-ID) 的动态自动关联。
     - [x] 对接 Prometheus 实现 5 分钟级 GPU 实时指标探测（显存、算力、特性）。
+    - [x] **MySQL Life-Trace 审计存根实现 (GORM)**。
 - [x] **实时状态缓冲区**：
     - [x] 配置 Redis 存储 5 分钟级能效快照，支撑 Dashboard 实时渲染。
 

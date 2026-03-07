@@ -1,107 +1,111 @@
 package storage
 
 import (
-	"database/sql"
 	"fmt"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/qxw/aipower-efficiency-pilot/internal/types"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
+// LifeTrace 数据库模型
+type LifeTrace struct {
+	ID          uint       `gorm:"primaryKey"`
+	PodUID      string     `gorm:"column:pod_uid;type:varchar(64);not null;index:idx_pod_uid"`
+	Namespace   string     `gorm:"column:namespace;type:varchar(64);not null"`
+	PodName     string     `gorm:"column:pod_name;type:varchar(128);not null"`
+	NodeName    string     `gorm:"column:node_name;type:varchar(128);not null"`
+	PoolID      string     `gorm:"column:pool_id;type:varchar(128);not null"`
+	SlicingMode string     `gorm:"column:slicing_mode;type:varchar(32);not null"`
+	StartTime   time.Time  `gorm:"column:start_time;type:datetime;not null;index:idx_time"`
+	EndTime     *time.Time `gorm:"column:end_time;type:datetime"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
+}
+
+// TableName 指定表名
+func (LifeTrace) TableName() string {
+	return "life_trace"
+}
+
 type MySQLClient struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
 func NewMySQLClient(dsn string) (*MySQLClient, error) {
-	db, err := sql.Open("mysql", dsn)
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open mysql: %v", err)
+		return nil, fmt.Errorf("failed to connect mysql: %v", err)
 	}
 
-	// 设置连接池
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping mysql: %v", err)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
 	}
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(25)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
 	client := &MySQLClient{db: db}
 	if err := client.InitSchema(); err != nil {
-		return nil, fmt.Errorf("failed to init mysql schema: %v", err)
+		return nil, fmt.Errorf("failed to init schema: %v", err)
 	}
 
 	return client, nil
 }
 
 func (m *MySQLClient) InitSchema() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS life_trace (
-		id INT AUTO_INCREMENT PRIMARY KEY,
-		pod_uid VARCHAR(64) NOT NULL,
-		namespace VARCHAR(64) NOT NULL,
-		pod_name VARCHAR(128) NOT NULL,
-		node_name VARCHAR(128) NOT NULL,
-		pool_id VARCHAR(128) NOT NULL,
-		slicing_mode VARCHAR(32) NOT NULL,
-		start_time DATETIME NOT NULL,
-		end_time DATETIME,
-		INDEX idx_pod_uid (pod_uid),
-		INDEX idx_time (start_time)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-	`
-	_, err := m.db.Exec(query)
-	return err
+	return m.db.AutoMigrate(&LifeTrace{})
 }
 
 func (m *MySQLClient) SaveLifeTrace(trace *types.PodTrace) error {
-	query := `
-	INSERT INTO life_trace (pod_uid, namespace, pod_name, node_name, pool_id, slicing_mode, start_time)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
-	ON DUPLICATE KEY UPDATE 
-		node_name=VALUES(node_name), 
-		pool_id=VALUES(pool_id), 
-		slicing_mode=VALUES(slicing_mode);
-	`
-	_, err := m.db.Exec(query,
-		trace.PodUID,
-		trace.Namespace,
-		trace.PodName,
-		trace.NodeName,
-		trace.PoolID,
-		string(trace.SlicingMode),
-		trace.StartTime)
-	return err
+	lt := &LifeTrace{
+		PodUID:      trace.PodUID,
+		Namespace:   trace.Namespace,
+		PodName:     trace.PodName,
+		NodeName:    trace.NodeName,
+		PoolID:      trace.PoolID,
+		SlicingMode: string(trace.SlicingMode),
+		StartTime:   trace.StartTime,
+	}
+
+	// 使用 Upsert 逻辑 (基于 PodUID)
+	return m.db.Where(LifeTrace{PodUID: lt.PodUID}).
+		Assign(LifeTrace{
+			NodeName:    lt.NodeName,
+			PoolID:      lt.PoolID,
+			SlicingMode: lt.SlicingMode,
+		}).
+		FirstOrCreate(lt).Error
 }
 
 func (m *MySQLClient) CloseLifeTrace(namespace, podName string) error {
-	query := `
-	UPDATE life_trace SET end_time = ? 
-	WHERE namespace = ? AND pod_name = ? AND end_time IS NULL 
-	ORDER BY start_time DESC LIMIT 1;
-	`
-	_, err := m.db.Exec(query, time.Now(), namespace, podName)
-	return err
+	now := time.Now()
+	return m.db.Model(&LifeTrace{}).
+		Where("namespace = ? AND pod_name = ? AND end_time IS NULL", namespace, podName).
+		Order("start_time DESC").
+		Limit(1).
+		Update("end_time", &now).Error
 }
 
 func (m *MySQLClient) GetActivePodTrace(namespace, podName string) (*types.PodTrace, error) {
-	// 这是一个辅助方法，方便后续对齐数据
-	query := `
-	SELECT pod_uid, namespace, pod_name, node_name, pool_id, slicing_mode, start_time 
-	FROM life_trace 
-	WHERE namespace = ? AND pod_name = ? AND end_time IS NULL 
-	ORDER BY start_time DESC LIMIT 1;
-	`
-	var t types.PodTrace
-	var slicingMode string
-	err := m.db.QueryRow(query, namespace, podName).Scan(
-		&t.PodUID, &t.Namespace, &t.PodName, &t.NodeName, &t.PoolID, &slicingMode, &t.StartTime,
-	)
+	var lt LifeTrace
+	err := m.db.Where("namespace = ? AND pod_name = ? AND end_time IS NULL", namespace, podName).
+		Order("start_time DESC").
+		First(&lt).Error
 	if err != nil {
 		return nil, err
 	}
-	t.SlicingMode = types.SlicingMode(slicingMode)
-	return &t, nil
+
+	return &types.PodTrace{
+		PodUID:      lt.PodUID,
+		Namespace:   lt.Namespace,
+		PodName:     lt.PodName,
+		NodeName:    lt.NodeName,
+		PoolID:      lt.PoolID,
+		SlicingMode: types.SlicingMode(lt.SlicingMode),
+		StartTime:   lt.StartTime,
+	}, nil
 }

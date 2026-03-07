@@ -7,6 +7,8 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.66.1
+	gorm.io/driver/mysql v1.6.0
+	gorm.io/gorm v1.31.1
 	k8s.io/api v0.35.2
 	k8s.io/apimachinery v0.35.2
 	k8s.io/client-go v0.35.2
@@ -38,6 +40,8 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
