@@ -105,3 +105,38 @@ func (r *RedisClient) GetPodTrace(namespace, podName string) (*types.PodTrace, e
 	}
 	return &trace, nil
 }
+
+// GetAllPodTraces 遍历 Redis 中所有的 PodTrace 快照
+func (r *RedisClient) GetAllPodTraces() ([]*types.PodTrace, error) {
+	var traces []*types.PodTrace
+	ctx := context.Background()
+
+	// 使用 SCAN 遍历 pod_trace: 开头的 key
+	var cursor uint64
+	for {
+		keys, nextCursor, err := r.client.Scan(ctx, cursor, "pod_trace:*", 100).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan redis keys: %v", err)
+		}
+
+		for _, key := range keys {
+			val, err := r.client.Get(ctx, key).Result()
+			if err != nil {
+				continue // 忽略已删除或过期的 key
+			}
+
+			var trace types.PodTrace
+			if err := json.Unmarshal([]byte(val), &trace); err != nil {
+				continue
+			}
+			traces = append(traces, &trace)
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return traces, nil
+}

@@ -10,52 +10,53 @@ import (
 	"time"
 
 	"github.com/qxw/aipower-efficiency-pilot/internal/collector"
+	"github.com/qxw/aipower-efficiency-pilot/internal/config"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
 )
 
 var (
-	kubeconfig    string
-	redisAddr     string
-	prometheusURL string
-	mysqlDSN      string
+	configFile string
 )
 
 func init() {
-	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
-	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis server address")
-	flag.StringVar(&prometheusURL, "prometheus-url", "http://localhost:9090", "Prometheus server URL")
-	flag.StringVar(&mysqlDSN, "mysql-dsn", "root:password@tcp(localhost:3306)/aipower?parseTime=true", "MySQL DSN")
+	flag.StringVar(&configFile, "config", "", "Path to configuration file")
 	flag.Parse()
 }
 
 func main() {
 	log.Println("Starting AIPower-Efficiency-Pilot Collector...")
 
+	// 0. 加载配置
+	cfg, err := config.LoadConfig(configFile)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// 1. 初始化 Redis
-	redisCli, err := storage.NewRedisClient(redisAddr, "", 0)
+	redisCli, err := storage.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
 		log.Fatalf("Failed to initialize Redis: %v", err)
 	}
 	log.Println("Connected to Redis successfully.")
 
 	// 1.5 初始化 MySQL
-	mysqlCli, err := storage.NewMySQLClient(mysqlDSN)
+	mysqlCli, err := storage.NewMySQLClient(cfg.MySQL.DSN)
 	if err != nil {
 		log.Fatalf("Failed to initialize MySQL: %v", err)
 	}
 	log.Println("Connected to MySQL successfully.")
 
 	// 2. 初始化 K8s Collector
-	k8sColl, err := collector.NewK8sCollector(kubeconfig, redisCli, mysqlCli)
+	k8sColl, err := collector.NewK8sCollector(cfg.K8s.Kubeconfig, redisCli, mysqlCli)
 	if err != nil {
 		log.Fatalf("Failed to initialize K8s Collector: %v", err)
 	}
 
 	// 3. 初始化 Prometheus Collector
-	promColl, err := collector.NewPrometheusCollector(prometheusURL, redisCli)
+	promColl, err := collector.NewPrometheusCollector(cfg.Prometheus.URL, redisCli)
 	if err != nil {
 		log.Fatalf("Failed to initialize Prometheus Collector: %v", err)
 	}
