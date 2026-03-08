@@ -38,3 +38,7 @@ dist/
 # Backend specific
 backend/bin/
 backend/tmp/
+backend/cmd/__debug_bin*
+backend/cmd/debug
+**/*.test
+**/*.out
