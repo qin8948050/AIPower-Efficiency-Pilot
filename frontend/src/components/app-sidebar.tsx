@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import {
   LayoutDashboard,
   Wallet,
@@ -13,6 +14,8 @@ import {
   Layout,
   Terminal,
   Box,
+  FileText,
+  Users,
 } from "lucide-react";
 
 import {
@@ -51,17 +54,17 @@ const data = {
         {
           title: "概览看板",
           url: "/billing",
-          icon: Wallet,
+          icon: LayoutDashboard,
         },
         {
           title: "Pod 级账单明细",
           url: "/billing/sessions",
-          icon: Layout,
+          icon: FileText,
         },
         {
           title: "业务维度分摊",
           url: "/billing/teams",
-          icon: Wallet,
+          icon: Users,
         },
         {
           title: "资源池效能量化",
@@ -135,18 +138,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenu>
                 {group.items.map((item) => {
                   const isActive = pathname === item.url;
+                  const Icon = item.icon;
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
                         tooltip={item.title}
                         isActive={isActive}
-                        className={isActive ? "bg-sidebar-primary text-sidebar-primary-foreground font-bold shadow-sm hover:bg-sidebar-primary hover:text-sidebar-primary-foreground" : ""}
+                        className={isActive ? "bg-sidebar-primary text-sidebar-primary-foreground font-bold shadow-sm" : ""}
                       >
-                        <a href={item.url}>
-                          {item.icon && <item.icon className={isActive ? "text-sidebar-primary-foreground" : ""} />}
+                        <Link href={item.url}>
+                          {Icon && <Icon />}
                           <span>{item.title}</span>
-                        </a>
+                        </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
