@@ -28,3 +28,16 @@ export interface LifeTrace {
   PowerUsageAvg: number;
   CostAmount: number;
 }
+
+export interface ResourcePool {
+  ID: string;
+  Name: string;
+  Scene: string;
+  GPUModel: string;
+  HardwareFeatures: string;
+  SlicingMode: string;
+  PricingLogic: string;
+  Priority: string;
+  Description: string;
+  UpdatedAt: string;
+}

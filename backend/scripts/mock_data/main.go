@@ -38,22 +38,36 @@ func main() {
 	redisClient.FlushDB()
 
 	// 2.6 注入定价配置 (Phase 2 核心)
-	fmt.Println("注入资源池定价配置...")
+	fmt.Println("注入资源池定价与资产配置...")
 	pricingList := []storage.PoolPricing{
-		{PoolID: "pool-v100-shared", GPUModel: "NVIDIA V100", BasePricePerHour: 28.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.35, SlicingWeightMPS: 0.5, SlicingWeightTS: 0.6},
-		{PoolID: "pool-a100-priority", GPUModel: "NVIDIA A100", BasePricePerHour: 55.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.4, SlicingWeightMPS: 0.6, SlicingWeightTS: 0.7},
-		{PoolID: "pool-t4-lowcost", GPUModel: "NVIDIA T4", BasePricePerHour: 12.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.3, SlicingWeightMPS: 0.4, SlicingWeightTS: 0.5},
+		{PoolID: "Train-H800-Full-Pool", GPUModel: "NVIDIA H800", BasePricePerHour: 85.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.4, SlicingWeightMPS: 0.6, SlicingWeightTS: 0.7},
+		{PoolID: "Train-A100-Full-Pool", GPUModel: "NVIDIA A100", BasePricePerHour: 55.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.4, SlicingWeightMPS: 0.6, SlicingWeightTS: 0.7},
+		{PoolID: "Infer-A100-MIG-Pool", GPUModel: "NVIDIA A100", BasePricePerHour: 55.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.35, SlicingWeightMPS: 0.5, SlicingWeightTS: 0.6},
+		{PoolID: "Infer-L4-MPS-Pool", GPUModel: "NVIDIA L4", BasePricePerHour: 18.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.3, SlicingWeightMPS: 0.4, SlicingWeightTS: 0.5},
+		{PoolID: "Dev-T4-TS-Pool", GPUModel: "NVIDIA T4", BasePricePerHour: 12.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.25, SlicingWeightMPS: 0.35, SlicingWeightTS: 0.4},
 	}
 	for _, p := range pricingList {
 		mysqlClient.SavePoolPricing(&p)
+	}
+
+	poolAssets := []storage.ResourcePool{
+		{ID: "Train-H800-Full-Pool", Name: "万卡大模型预训练池", Scene: "大模型预训练", GPUModel: "NVIDIA H800", HardwareFeatures: "NVLink,RDMA,FP8", SlicingMode: "Full", PricingLogic: "资源预留 (Reserved)", Priority: "High", Description: "核心算力底座，用于基座模型训练"},
+		{ID: "Train-A100-Full-Pool", Name: "模型全量微调池", Scene: "模型微调", GPUModel: "NVIDIA A100", HardwareFeatures: "NVLink,RDMA", SlicingMode: "Full", PricingLogic: "资源预留 (Reserved)", Priority: "High", Description: "用于部门核心模型 SFT"},
+		{ID: "Infer-A100-MIG-Pool", Name: "核心推理服务池", Scene: "核心推理", GPUModel: "NVIDIA A100", HardwareFeatures: "Multi-Instance GPU", SlicingMode: "MIG", PricingLogic: "按规格计费", Priority: "High", Description: "保障核心线上推理 SLA"},
+		{ID: "Infer-L4-MPS-Pool", Name: "高并发并行推理池", Scene: "小模型推理", GPUModel: "NVIDIA L4", HardwareFeatures: "MPS Parallel", SlicingMode: "MPS", PricingLogic: "吞吐量分摊", Priority: "Medium", Description: "低延迟、高吞吐推理场景"},
+		{ID: "Dev-T4-TS-Pool", Name: "研发测试超分池", Scene: "研发调试", GPUModel: "NVIDIA T4", HardwareFeatures: "Time-Slicing", SlicingMode: "TS", PricingLogic: "极低单价 (Spot)", Priority: "Low", Description: "仅用于 CI/CD 和研发测试"},
+	}
+	for _, a := range poolAssets {
+		mysqlClient.UpsertResourcePool(&a)
+		mysqlClient.UpdateResourcePoolMetadata(&a)
 	}
 
 	// 3. 定义模拟数据
 	fmt.Println("开始注入新的模拟数据...")
 	namespaces := []string{"default", "ai-platform", "data-science", "inference-prod"}
 	teams := []string{"CV-Team", "NLP-Group", "Search-Algo", "Infrastructure"}
-	nodes := []string{"gpu-node-01", "gpu-node-02", "gpu-node-03"}
-	pools := []string{"pool-v100-shared", "pool-a100-priority", "pool-t4-lowcost"}
+	nodes := []string{"gpu-node-01", "gpu-node-02", "gpu-node-03", "gpu-node-04", "gpu-node-05"}
+	pools := []string{"Train-H800-Full-Pool", "Train-A100-Full-Pool", "Infer-A100-MIG-Pool", "Infer-L4-MPS-Pool", "Dev-T4-TS-Pool"}
 	modes := []types.SlicingMode{types.SlicingModeMIG, types.SlicingModeMPS, types.SlicingModeTS, types.SlicingModeFull}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))

@@ -101,22 +101,53 @@ func (c *K8sCollector) Start(ctx context.Context) error {
 }
 
 func (c *K8sCollector) handleNode(node *v1.Node) {
-	// 识别 Node 的 PoolID
+	// 1. 识别 Node 的 PoolID
 	labels := node.GetLabels()
 	poolID, ok := labels["nvidia.com/pool-id"]
+	gpuModel := labels["nvidia.com/gpu.product"]
+
 	if !ok {
 		// 回退策略：基于型号
-		if gpuModel, hasModel := labels["nvidia.com/gpu.product"]; hasModel {
+		if gpuModel != "" {
 			poolID = fmt.Sprintf("Default-%s-Pool", strings.ToUpper(strings.ReplaceAll(gpuModel, " ", "-")))
 		} else {
 			poolID = "Unknown-Pool"
 		}
 	}
 
+	// 2. 识别硬指标特性 (NVLink, RDMA 等)
+	var features []string
+	if val, ok := labels["nvidia.com/gpu.family"]; ok && strings.Contains(strings.ToLower(val), "nvlink") {
+		features = append(features, "NVLink")
+	}
+	if _, ok := labels["nvidia.com/rdma.capable"]; ok {
+		features = append(features, "RDMA")
+	}
+	// 简单的切分模式感知
+	slicing := "Full"
+	if _, ok := labels["nvidia.com/mig.config"]; ok {
+		slicing = "MIG"
+	} else if _, ok := labels["nvidia.com/mps.capable"]; ok {
+		slicing = "MPS"
+	}
+
+	// 3. 保存至 Redis (实时调度感知)
 	if err := c.redis.SaveNodePoolID(node.Name, poolID); err != nil {
 		log.Printf("Failed to save node pool info for %s: %v", node.Name, err)
+	}
+
+	// 4. 自动注册资产存根至 MySQL (资产管理)
+	poolAsset := &storage.ResourcePool{
+		ID:               poolID,
+		Name:             poolID, // 默认名与 ID 一致，待管理员修改
+		GPUModel:         gpuModel,
+		HardwareFeatures: strings.Join(features, ","),
+		SlicingMode:      slicing,
+	}
+	if err := c.mysql.UpsertResourcePool(poolAsset); err != nil {
+		log.Printf("Failed to auto-register pool asset %s: %v", poolID, err)
 	} else {
-		log.Printf("Discovered Node Pool: %s -> %s", node.Name, poolID)
+		log.Printf("Asset Synced: Pool %s (Model: %s, Features: %v)", poolID, gpuModel, features)
 	}
 }
 

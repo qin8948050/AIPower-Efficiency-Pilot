@@ -239,6 +239,34 @@ func main() {
 			}
 			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 		})
+
+		// --- 资源池资产管理 ---
+
+		// 获取所有已感知的资源池资产
+		v2.GET("/pools", func(c *gin.Context) {
+			pools, err := mysqlCli.GetAllResourcePools()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, pools)
+		})
+
+		// 更新资源池业务元数据
+		v2.PUT("/pools/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			var p storage.ResourcePool
+			if err := c.ShouldBindJSON(&p); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			p.ID = id
+			if err := mysqlCli.UpdateResourcePoolMetadata(&p); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "metadata updated"})
+		})
 	}
 
 	log.Printf("API Server listening on %s", cfg.Server.Addr)

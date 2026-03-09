@@ -16,6 +16,7 @@ import {
   Box,
   FileText,
   Users,
+  Database,
 } from "lucide-react";
 
 import {
@@ -96,6 +97,11 @@ const data = {
       icon: Settings,
       items: [
         {
+          title: "资源池资产管理",
+          url: "/admin/pools",
+          icon: Database,
+        },
+        {
           title: "池化定价管理",
           url: "/admin/pricing",
           icon: Wallet,
@@ -145,7 +151,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         asChild
                         tooltip={item.title}
                         isActive={isActive}
-                        className={isActive ? "bg-sidebar-primary text-sidebar-primary-foreground font-bold shadow-sm" : ""}
+                        className={isActive ? "bg-sidebar-primary text-sidebar-primary-foreground font-bold shadow-sm hover:bg-sidebar-primary hover:text-sidebar-primary-foreground" : ""}
                       >
                         <Link href={item.url}>
                           {Icon && <Icon />}

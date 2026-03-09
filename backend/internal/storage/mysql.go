@@ -96,8 +96,55 @@ func NewMySQLClient(dsn string) (*MySQLClient, error) {
 	return client, nil
 }
 
+// ResourcePool 资源池元数据 (基于 K8s 标签感知的逻辑资产)
+type ResourcePool struct {
+	ID               string    `gorm:"column:pool_id;type:varchar(128);primaryKey"`
+	Name             string    `gorm:"column:name;type:varchar(128);not null"`
+	Scene            string    `gorm:"column:scene;type:varchar(64)"` // 预训练、推理、研发等
+	GPUModel         string    `gorm:"column:gpu_model;type:varchar(64)"`
+	HardwareFeatures string    `gorm:"column:hardware_features;type:varchar(255)"` // NVLink, RDMA 等
+	SlicingMode      string    `gorm:"column:slicing_mode;type:varchar(32)"`      // Full, MIG, MPS, TS
+	PricingLogic     string    `gorm:"column:pricing_logic;type:varchar(64)"`     // Reserved, Spot 等
+	Priority         string    `gorm:"column:priority;type:varchar(32)"`          // High, Low
+	Description      string    `gorm:"column:description;type:text"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (ResourcePool) TableName() string { return "resource_pool" }
+
 func (m *MySQLClient) InitSchema() error {
-	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{})
+	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{})
+}
+
+// UpsertResourcePool 发现新池子时自动创建或更新硬指标 (型号、特性、模式)
+func (m *MySQLClient) UpsertResourcePool(p *ResourcePool) error {
+	return m.db.Where(ResourcePool{ID: p.ID}).
+		Assign(ResourcePool{
+			GPUModel:         p.GPUModel,
+			HardwareFeatures: p.HardwareFeatures,
+			SlicingMode:      p.SlicingMode,
+		}).
+		FirstOrCreate(p).Error
+}
+
+// UpdateResourcePoolMetadata 手动更新业务层面的元数据 (别名、场景、定价、优先级、备注)
+func (m *MySQLClient) UpdateResourcePoolMetadata(p *ResourcePool) error {
+	return m.db.Model(&ResourcePool{}).Where("pool_id = ?", p.ID).
+		Updates(map[string]interface{}{
+			"name":          p.Name,
+			"scene":         p.Scene,
+			"pricing_logic": p.PricingLogic,
+			"priority":      p.Priority,
+			"description":   p.Description,
+		}).Error
+}
+
+// GetAllResourcePools 获取所有已感知的资源池
+func (m *MySQLClient) GetAllResourcePools() ([]ResourcePool, error) {
+	var pools []ResourcePool
+	err := m.db.Order("priority desc, pool_id asc").Find(&pools).Error
+	return pools, err
 }
 
 // TruncateTable 清空生命留痕表 (仅用于测试/Mock)
