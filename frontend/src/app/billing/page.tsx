@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Card,
   CardContent,
@@ -31,38 +31,78 @@ import {
   Legend,
 } from "recharts";
 import { Wallet, TrendingUp, CreditCard, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { DailyBillingSnapshot, LifeTrace } from "@/lib/types";
 
-const costData = [
-  { name: "1月", cpu: 4500, gpu: 12000, mem: 2100 },
-  { name: "2月", cpu: 5200, gpu: 15000, mem: 2400 },
-  { name: "3月", cpu: 4800, gpu: 18000, mem: 2200 },
-  { name: "4月", cpu: 6100, gpu: 22000, mem: 3100 },
-  { name: "5月", cpu: 5900, gpu: 21000, mem: 2800 },
-  { name: "6月", cpu: 7200, gpu: 28000, mem: 3500 },
-];
-
-const distributionData = [
-  { name: "训练集群-A", value: 45, color: "#3b82f6" },
-  { name: "推理集群-B", value: 30, color: "#10b981" },
-  { name: "开发环境-C", value: 15, color: "#f59e0b" },
-  { name: "其他项目", value: 10, color: "#6366f1" },
-];
-
-const transactions = [
-  { id: "TX-9021", date: "2024-03-08", dept: "AI 实验室", amount: "¥12,450.00", status: "已结算", type: "GPU 训练" },
-  { id: "TX-9022", date: "2024-03-07", dept: "内容安全部", amount: "¥8,200.00", status: "处理中", type: "模型推理" },
-  { id: "TX-9023", date: "2024-03-05", dept: "搜索算法组", amount: "¥15,600.00", status: "已结算", type: "混合算力" },
-  { id: "TX-9024", date: "2024-03-04", dept: "平台架构层", amount: "¥3,500.00", status: "已结算", type: "基础资源" },
-];
+const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#6366f1", "#ec4899", "#8b5cf6"];
 
 export default function BillingPage() {
+  const [dailySnapshots, setDailySnapshots] = useState<DailyBillingSnapshot[]>([]);
+  const [transactions, setTransactions] = useState<LifeTrace[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // 1. 获取日级账单聚合数据 (用于趋势图 & 分布图)
+        const dailyRes = await fetch("http://localhost:8080/api/v2/billing/daily"); // Replace with env var in prod
+        const dailyData: DailyBillingSnapshot[] = await dailyRes.json();
+        setDailySnapshots(dailyData || []);
+
+        // 2. 获取最近的会话账单明细 (用于列表)
+        const sessionsRes = await fetch("http://localhost:8080/api/v2/billing/sessions"); // Default to yesterday/today
+        const sessionsData: LifeTrace[] = await sessionsRes.json();
+        setTransactions(sessionsData || []);
+      } catch (error) {
+        console.error("Failed to fetch billing data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  // --- Data Processing for Charts ---
+
+  // 1. 成本趋势 (按日期聚合)
+  const costTrendMap = new Map<string, number>();
+  dailySnapshots.forEach((s) => {
+    const date = s.SnapshotDate.substring(5, 10); // "MM-DD"
+    const current = costTrendMap.get(date) || 0;
+    costTrendMap.set(date, current + s.TotalCost);
+  });
+  // Sort by date
+  const sortedDates = Array.from(costTrendMap.keys()).sort();
+  const costData = sortedDates.map((date) => ({
+    name: date,
+    gpu: costTrendMap.get(date) || 0,
+    cpu: 0, // 暂未统计 CPU 成本
+    mem: 0, // 暂未统计 内存 成本
+  }));
+
+  // 2. 部门/池子分摊 (按 PoolID 聚合)
+  const poolCostMap = new Map<string, number>();
+  dailySnapshots.forEach((s) => {
+    const current = poolCostMap.get(s.PoolID) || 0;
+    poolCostMap.set(s.PoolID, current + s.TotalCost);
+  });
+  const distributionData = Array.from(poolCostMap.entries()).map(([name, value], index) => ({
+    name,
+    value,
+    color: COLORS[index % COLORS.length],
+  }));
+
+  // 3. 汇总指标
+  const totalEstimatedCost = dailySnapshots.reduce((acc, curr) => acc + curr.TotalCost, 0);
+  const totalSessions = transactions.length;
+
   return (
     <div className="flex-1 space-y-4 p-8 pt-6">
       <div className="flex items-center justify-between space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">成本分摊中心</h2>
         <div className="flex items-center space-x-2">
           <Badge variant="outline" className="px-3 py-1 text-sm">
-            结算周期: 2024 Q1
+            数据来源: 实时聚合
           </Badge>
         </div>
       </div>
@@ -71,27 +111,24 @@ export default function BillingPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">本月预估总额</CardTitle>
+            <CardTitle className="text-sm font-medium">总预估成本 (本期)</CardTitle>
             <Wallet className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">¥38,700.00</div>
+            <div className="text-2xl font-bold">¥{totalEstimatedCost.toFixed(2)}</div>
             <p className="text-xs text-muted-foreground flex items-center mt-1">
-              <span className="text-emerald-500 flex items-center font-medium mr-1">
-                <ArrowUpRight className="h-3 w-3 mr-0.5" /> +12.5%
-              </span>
-              较上月同期
+              基于已聚合的日级快照
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">GPU 核心成本</CardTitle>
+            <CardTitle className="text-sm font-medium">GPU 算力成本</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">¥28,000.00</div>
-            <p className="text-xs text-muted-foreground mt-1">占比 72.3%</p>
+            <div className="text-2xl font-bold">¥{totalEstimatedCost.toFixed(2)}</div>
+            <p className="text-xs text-muted-foreground mt-1">占比 100% (当前仅计 GPU)</p>
           </CardContent>
         </Card>
         <Card>
@@ -100,18 +137,18 @@ export default function BillingPage() {
             <ArrowDownRight className="h-4 w-4 text-rose-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-rose-500">¥1,250.00</div>
-            <p className="text-xs text-muted-foreground mt-1">优化建议: 缩容 15%</p>
+            <div className="text-2xl font-bold text-rose-500">--</div>
+            <p className="text-xs text-muted-foreground mt-1">需 Phase 3 AI 分析接入</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">待结算账单</CardTitle>
+            <CardTitle className="text-sm font-medium">近日会话数</CardTitle>
             <CreditCard className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">¥12,450.00</div>
-            <p className="text-xs text-muted-foreground mt-1">包含 2 个待处理项目</p>
+            <div className="text-2xl font-bold">{totalSessions}</div>
+            <p className="text-xs text-muted-foreground mt-1">最近 24 小时活跃 Pod</p>
           </CardContent>
         </Card>
       </div>
@@ -120,8 +157,8 @@ export default function BillingPage() {
         {/* Cost Trend Chart */}
         <Card className="col-span-4">
           <CardHeader>
-            <CardTitle>算力成本趋势</CardTitle>
-            <CardDescription>最近 6 个月的 CPU/GPU/内存 支出分布</CardDescription>
+            <CardTitle>算力成本趋势 (Daily)</CardTitle>
+            <CardDescription>最近日期的 GPU 算力支出分布</CardDescription>
           </CardHeader>
           <CardContent className="pl-2">
             <div className="h-[350px] w-full">
@@ -129,15 +166,13 @@ export default function BillingPage() {
                 <BarChart data={costData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
-                  <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `¥${value / 1000}k`} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `¥${value}`} />
                   <Tooltip
                     cursor={{ fill: 'rgba(0,0,0,0.05)' }}
                     contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                   />
                   <Legend iconType="circle" />
                   <Bar dataKey="gpu" name="GPU 成本" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="cpu" name="CPU 成本" fill="#10b981" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="mem" name="内存 成本" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -147,8 +182,8 @@ export default function BillingPage() {
         {/* Distribution Chart */}
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle>部门成本分担</CardTitle>
-            <CardDescription>当前季度各资源池支出占比</CardDescription>
+            <CardTitle>资源池成本分担</CardTitle>
+            <CardDescription>各资源池累计支出占比</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-[300px] w-full flex items-center justify-center">
@@ -172,15 +207,6 @@ export default function BillingPage() {
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="mt-4 space-y-4">
-              <div className="flex items-center text-sm">
-                <div className="flex-1 font-medium">最高支出项目: 训练集群-A</div>
-                <div className="text-muted-foreground">¥17.4k</div>
-              </div>
-              <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                <div className="bg-blue-500 h-full w-[45%]" />
-              </div>
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -189,31 +215,33 @@ export default function BillingPage() {
       <Card>
         <CardHeader>
           <CardTitle>最近结算记录</CardTitle>
-          <CardDescription>查看详细的资源使用结算清单</CardDescription>
+          <CardDescription>Pod 会话级账单明细</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>账单 ID</TableHead>
-                <TableHead>使用部门</TableHead>
-                <TableHead>资源类型</TableHead>
-                <TableHead>产生日期</TableHead>
-                <TableHead>金额</TableHead>
+                <TableHead>Pod Name</TableHead>
+                <TableHead>Namespace</TableHead>
+                <TableHead>资源池</TableHead>
+                <TableHead>切片模式</TableHead>
+                <TableHead>开始时间</TableHead>
+                <TableHead>费用 (¥)</TableHead>
                 <TableHead className="text-right">状态</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {transactions.map((tx) => (
-                <TableRow key={tx.id}>
-                  <TableCell className="font-medium">{tx.id}</TableCell>
-                  <TableCell>{tx.dept}</TableCell>
-                  <TableCell>{tx.type}</TableCell>
-                  <TableCell>{tx.date}</TableCell>
-                  <TableCell>{tx.amount}</TableCell>
+                <TableRow key={tx.ID}>
+                  <TableCell className="font-medium">{tx.PodName}</TableCell>
+                  <TableCell>{tx.Namespace}</TableCell>
+                  <TableCell>{tx.PoolID}</TableCell>
+                  <TableCell>{tx.SlicingMode}</TableCell>
+                  <TableCell>{new Date(tx.StartTime).toLocaleString()}</TableCell>
+                  <TableCell>¥{tx.CostAmount.toFixed(4)}</TableCell>
                   <TableCell className="text-right">
-                    <Badge variant={tx.status === "已结算" ? "outline" : "secondary"}>
-                      {tx.status}
+                    <Badge variant={tx.EndTime ? "outline" : "secondary"}>
+                      {tx.EndTime ? "已结算" : "运行中"}
                     </Badge>
                   </TableCell>
                 </TableRow>
@@ -225,3 +253,4 @@ export default function BillingPage() {
     </div>
   );
 }
+

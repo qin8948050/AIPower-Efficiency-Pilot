@@ -6,8 +6,10 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/qxw/aipower-efficiency-pilot/internal/aggregator"
 	"github.com/qxw/aipower-efficiency-pilot/internal/config"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
+	"time"
 )
 
 var (
@@ -40,12 +42,48 @@ func main() {
 		log.Fatalf("Failed to initialize MySQL: %v", err)
 	}
 
-	// 3. 设置路由
+	// 3. 启动后台任务 (Stitcher & Daily Aggregation)
+	go func() {
+		log.Println("[worker] Background tasks started")
+		stitchTicker := time.NewTicker(10 * time.Minute)
+		// 每天 01:00 执行聚合，这里简单起见每小时检查一次
+		dailyCheckTicker := time.NewTicker(1 * time.Hour)
+		defer stitchTicker.Stop()
+		defer dailyCheckTicker.Stop()
+
+		for {
+			select {
+			case <-stitchTicker.C:
+				log.Println("[worker] Running metrics stitcher...")
+				if err := aggregator.RunStitcher(mysqlCli, 50); err != nil {
+					log.Printf("[worker] Stitcher error: %v", err)
+				}
+			case <-dailyCheckTicker.C:
+				now := time.Now()
+				if now.Hour() == 1 {
+					log.Println("[worker] Running daily aggregation...")
+					// 聚合前一天的数据
+					yesterday := now.Add(-24 * time.Hour)
+					if err := aggregator.RunDailyAggregation(mysqlCli, yesterday); err != nil {
+						log.Printf("[worker] Daily aggregation error: %v", err)
+					}
+				}
+			}
+		}
+	}()
+
+	// 4. 设置路由
 	r := gin.Default()
 
 	// 允许跨域 (简单版)
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
 		c.Next()
 	})
 
@@ -140,6 +178,66 @@ func main() {
 		// 健康检查
 		v1.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		})
+	}
+
+	// Phase 2: Billing & Consolidation API
+	v2 := r.Group("/api/v2")
+	{
+		// 日级账单汇总
+		v2.GET("/billing/daily", func(c *gin.Context) {
+			date := c.Query("date")
+			// 若未指定日期，则返回所有历史聚合数据 (用于趋势图)
+			snapshots, err := mysqlCli.GetDailySnapshots(date)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, snapshots)
+		})
+
+		// 账单明细查询 (Pod Session 粒度)
+		v2.GET("/billing/sessions", func(c *gin.Context) {
+			date := c.Query("date")
+			if date == "" {
+				date = time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+			}
+			poolID := c.Query("pool_id")
+			ns := c.Query("namespace")
+			team := c.Query("team_label")
+
+			sessions, err := mysqlCli.GetBillingSessions(date, poolID, ns, team)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, sessions)
+		})
+
+		// 获取定价配置
+		v2.GET("/pricing", func(c *gin.Context) {
+			pricing, err := mysqlCli.GetAllPoolPricing()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, pricing)
+		})
+
+		// 更新定价配置
+		v2.PUT("/pricing/:pool_id", func(c *gin.Context) {
+			poolID := c.Param("pool_id")
+			var p storage.PoolPricing
+			if err := c.ShouldBindJSON(&p); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			p.PoolID = poolID
+			if err := mysqlCli.SavePoolPricing(&p); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 		})
 	}
 

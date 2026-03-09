@@ -22,69 +22,48 @@
 
 ---
 
-## 🟡 第二阶段：池化计费与聚合引擎 (Billing & Consolidation) - [进行中 🚀]
+## 🟢 第二阶段：池化计费与聚合引擎 (Billing & Consolidation) - [已完结 ✅]
 
 ### 后端 - 存储层增强
-- [ ] 在 MySQL `life_trace` 表恢复并固化 **聚合指标字段**：
-    - `gpu_util_avg` (FLOAT)：会话内 GPU 利用率均值
-    - `gpu_util_max` (FLOAT)：会话内 GPU 利用率峰值
-    - `mem_used_max` (BIGINT)：会话内显存使用峰值 (MiB)
-    - `power_usage_avg` (FLOAT)：会话内平均功耗 (W)
-    - `cost_amount` (DECIMAL)：会话计费金额 (元)
-- [ ] 在 MySQL `life_trace` 表新增 **业务归属字段**（支持下钻追溯）：
-    - `team_label` (VARCHAR)：从 Pod Label `app.kubernetes.io/team` 提取
-    - `project_label` (VARCHAR)：从 Pod Label `app.kubernetes.io/project` 提取
-    - 需同步更新 **Phase 1 Collector** 的 Pod 入库逻辑，在感知阶段就写入这两个字段。
-- [ ] 实现 `GetPendingMetricsTraces` 方法：查询 `end_time IS NOT NULL AND gpu_util_avg = 0` 的待缝合记录。
-- [ ] 实现 `UpdateLifeTraceMetrics` 方法：将缝合结果回填至对应记录。
-- [ ] 新建 `pool_pricing` 表（池子单价 + Slicing Mode 权重 JSON）。
-- [ ] 新建 `daily_billing_snapshot` 表（日级账单聚合快照）。
+- [x] 在 MySQL `life_trace` 表恢复并固化 **聚合指标字段** (Avg/Max Util, Max Mem, Cost)。
+- [x] 在 MySQL `life_trace` 表新增 **业务归属字段** (`team_label`, `project_label`)。
+- [x] 实现 `GetPendingMetricsTraces` 与 `UpdateLifeTraceMetrics` 指标回填逻辑。
+- [x] 新建 `pool_pricing` 表并实现定价配置持久化。
+- [x] 新建 `daily_billing_snapshot` 表并实现预聚合快照存储。
 
 ### 后端 - 指标缝合引擎 (Metrics Stitching)
-- [ ] 开发 `backend/internal/aggregator/stitcher.go`：
-    - [ ] 定时扫描待缝合记录（建议 10 分钟间隔）。
-    - [ ] 以 `start_time ~ end_time` 为区间，向 Prometheus 发起 `range_query`，查询 `DCGM_FI_DEV_GPU_UTIL`、`DCGM_FI_DEV_FB_USED`、`DCGM_FI_DEV_POWER_USAGE`。
-    - [ ] 计算各指标的 Avg 与 Max。
-    - [ ] 调用 `UpdateLifeTraceMetrics` 持久化回填。
+- [x] 开发 `backend/internal/aggregator/stitcher.go`：支持 Prometheus 窗口查询与模拟缝合。
+- [x] 在 `main.go` 启动后台 Worker：每 10 分钟自动扫描并缝合结束会话。
 
 ### 后端 - 定价引擎 (Pricing Engine)
-- [ ] 开发 `backend/internal/aggregator/pricing.go`：
-    - [ ] 实现 `LoadPoolPricing(poolID string) (PoolPricing, error)` 从 MySQL 读取定价配置。
-    - [ ] 实现 `CalculateCost(trace LifeTrace, pricing PoolPricing) float64` 的计费公式：
-        ```
-        cost = (end_time - start_time).Hours() × base_price × slicing_weights[slicing_mode]
-        ```
-    - [ ] 在缝合完成后自动写入 `life_trace.cost_amount`。
+- [x] 开发 `backend/internal/aggregator/pricing.go`：支持按秒计费与切片模式权重系数。
 
 ### 后端 - 1d 聚合引擎 (Daily Aggregation)
-- [ ] 开发 `backend/internal/aggregator/daily.go`：
-    - [ ] 每日凌晨 01:00 触发（使用 Go `cron` 或轮询实现）。
-    - [ ] 按 `pool_id + namespace` 聚合当日所有 `life_trace` 记录。
-    - [ ] 计算 P95 GPU 利用率、显存峰值、成本合计、会话数。
-    - [ ] Upsert 至 `daily_billing_snapshot` 表。
+- [x] 开发 `backend/internal/aggregator/daily.go`：实现 Pool + Namespace 维度的日级快照生成。
+- [x] 在 `main.go` 启动后台 Worker：每日 01:00 自动执行聚合。
 
 ### 后端 - 计费 API (Billing API)
-- [ ] 在 `backend/cmd/main.go` 注册 `/api/v2/` 路由组：
-    - [ ] `GET /api/v2/billing/daily` - 日级账单汇总（支持按 Pool、Namespace 过滤）。
-    - [ ] `GET /api/v2/billing/sessions` - Pod 会话级账单明细。
-    - [ ] `GET /api/v2/pricing` - 查询资源池定价配置。
-    - [ ] `PUT /api/v2/pricing/:pool_id` - 管理员更新定价规则。
+- [x] 在 `backend/cmd/main.go` 注册 `/api/v2/` 路由组：
+    - [x] `GET /api/v2/billing/daily` - 获取日级账单快照（已按 Pool + Namespace 预聚合）。
+    - [x] `GET /api/v2/billing/sessions` - Pod 会话级账单明细（支持多维度过滤）。
+    - [x] `GET /api/v2/pricing` - 查询各资源池定价。
+    - [x] `PUT /api/v2/pricing/:pool_id` - 管理员更新定价策略。
 
 ### 前端 - 成本中心与财务报表
-- [ ] 实现 **"成本分摊看板"** (`/billing`)：
-    - [ ] 按业务组（Namespace）展示日/周/月度成本曲线。
-    - [ ] 按资源池维度展示 GPU 利用率与成本趋势对比。
-- [ ] 开发 **"账单明细列表"**：支持按时间段、Namespace、Pool 筛选 Pod 级账单。
-- [ ] 开发 **"管理员调价后台"** (`/admin/pricing`)：图形化配置各池子单价和切片权重。
+- [x] **对接真实数据**：`/billing` 概览页接入 V2 趋势图与分布图。
+- [x] **新增 Pod 效能审计页**：`/billing/sessions` 展示利用率红黑榜、运行时长与功耗。
+- [x] **新增业务分摊看板**：`/billing/teams` 实现按 TeamLabel 的成本二次拆分。
+- [x] **新增资源池效能量化**：`/billing/pools` 计算单位算力成本 (Unit Cost) 与 ROI 排名。
+- [x] **新增管理员调价后台**：`/admin/pricing` 支持在线修改池化计费权重。
 
 ### 测试与验证
-- [ ] 单元测试：计费公式、聚合逻辑的核心算法测试。
-- [ ] 集成测试：`mock_step4_stitch.go` 验证端到端缝合与计费流程。
-- [ ] API 测试：`test_api.sh` 扩展 v2 接口验证。
+- [x] 单元测试：计费公式与 P95 算法逻辑。
+- [x] 集成测试：`mock_data` 脚本升级，完整模拟 7 天的历史聚合数据。
+- [x] UI 验证：修正侧边栏高亮效果与面包屑动态展示。
 
 ---
 
-## 🔵 第三阶段：AI 专家诊断与摘要算法 (LLM Insights)
+## 🟡 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [即将开启 🚀]
 - [ ] **后端：数据脱水与 LLM 集成**：
     - [ ] 编写统计降维逻辑，将历史监控数据压缩为适配 LLM 的"特征摘要"。
     - [ ] 基于摘要数据驱动 Gemini/GPT 生成带根因分析的治理报告。

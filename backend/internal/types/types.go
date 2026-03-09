@@ -15,16 +15,18 @@ const (
 
 // PodTrace 存储关于 Pod 的池化感知信息
 type PodTrace struct {
-	Namespace   string            `json:"namespace"`
-	PodName     string            `json:"pod_name"`
-	PodUID      string            `json:"pod_uid"`
-	NodeName    string            `json:"node_name"`
-	PoolID      string            `json:"pool_id"`
-	SlicingMode SlicingMode       `json:"slicing_mode"`
-	GPUs        []string          `json:"gpus,omitempty"` // 挂载的 GPU UUID 或 Index
-	StartTime   time.Time         `json:"start_time"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Metrics     *GPUMetrics       `json:"metrics,omitempty"` // 实时指标快照
+	Namespace    string            `json:"namespace"`
+	PodName      string            `json:"pod_name"`
+	PodUID       string            `json:"pod_uid"`
+	NodeName     string            `json:"node_name"`
+	PoolID       string            `json:"pool_id"`
+	SlicingMode  SlicingMode       `json:"slicing_mode"`
+	GPUs         []string          `json:"gpus,omitempty"` // 挂载的 GPU UUID 或 Index
+	StartTime    time.Time         `json:"start_time"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	TeamLabel    string            `json:"team_label,omitempty"`    // 业务 Team 标签
+	ProjectLabel string            `json:"project_label,omitempty"` // 业务 Project 标签
+	Metrics      *GPUMetrics       `json:"metrics,omitempty"`       // 实时指标快照
 }
 
 // GPUMetrics 存储 5 分钟级的 GPU 实时指标平均值/峰值

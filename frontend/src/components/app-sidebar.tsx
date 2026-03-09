@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Wallet,
@@ -11,6 +12,7 @@ import {
   TrendingDown,
   Layout,
   Terminal,
+  Box,
 } from "lucide-react";
 
 import {
@@ -39,10 +41,32 @@ const data = {
           url: "/",
           icon: Layout,
         },
+      ],
+    },
+    {
+      title: "成本分摊中心",
+      url: "#",
+      icon: Wallet,
+      items: [
         {
-          title: "成本分摊中心",
+          title: "概览看板",
           url: "/billing",
           icon: Wallet,
+        },
+        {
+          title: "Pod 级账单明细",
+          url: "/billing/sessions",
+          icon: Layout,
+        },
+        {
+          title: "业务维度分摊",
+          url: "/billing/teams",
+          icon: Wallet,
+        },
+        {
+          title: "资源池效能量化",
+          url: "/billing/pools",
+          icon: Box,
         },
       ],
     },
@@ -70,7 +94,7 @@ const data = {
       items: [
         {
           title: "池化定价管理",
-          url: "/settings/pricing",
+          url: "/admin/pricing",
           icon: Wallet,
         },
         {
@@ -84,6 +108,8 @@ const data = {
 };
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const pathname = usePathname();
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -107,16 +133,24 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton asChild tooltip={item.title}>
-                      <a href={item.url}>
-                        {item.icon && <item.icon />}
-                        <span>{item.title}</span>
-                      </a>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                {group.items.map((item) => {
+                  const isActive = pathname === item.url;
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.title}
+                        isActive={isActive}
+                        className={isActive ? "bg-sidebar-primary text-sidebar-primary-foreground font-bold shadow-sm hover:bg-sidebar-primary hover:text-sidebar-primary-foreground" : ""}
+                      >
+                        <a href={item.url}>
+                          {item.icon && <item.icon className={isActive ? "text-sidebar-primary-foreground" : ""} />}
+                          <span>{item.title}</span>
+                        </a>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

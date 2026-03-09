@@ -87,14 +87,30 @@
 
     | Method | Path | 说明 |
     |---|---|---|
-    | GET | `/api/v2/billing/daily` | 查询每日账单汇总（按 Pool 或 Namespace 分组）|
+    | GET | `/api/v2/billing/daily` | 查询每日账单汇总（按 Pool 或 Namespace 或Team 分组）|
     | GET | `/api/v2/billing/sessions` | 查询 Pod 会话级账单明细 |
     | GET | `/api/v2/pricing` | 查询各资源池当前定价配置 |
     | PUT | `/api/v2/pricing/:pool_id` | 管理员更新指定池子的单价及权重 |
 
 ---
 
-## 验证计划
+## 步骤五：前端页面开发 (Frontend)
+
+> 注：`/billing/page.tsx` 已有 Mock UI 骨架，本阶段以对接真实 API 为主，并补齐三层下钻所需的细分页面。
+
+| 页面路径 | 功能说明 | 核心组件 |
+|---|---|---|
+| `/billing` (改造) | 对接真实日级账单，替换折线图/饼图数据源 | `GET /api/v2/billing/daily` |
+| `/billing/sessions` (新增) | Pod 级明细：利用率、显存、费用，支持按 Pool/Team 筛选 | `GET /api/v2/billing/sessions` |
+| `/billing/teams` (新增) | 业务维度分摊：按团队/项目下钻，支持点击展开 Pod 列表 | `GET /api/v2/billing/daily?group=team` |
+| `/admin/pricing` (新增) | 管理员调价：行内编辑池子单价与切片权重 | `PUT /api/v2/pricing/:pool_id` |
+
+**重点交互设计：**
+- `/billing/sessions` 对利用率 < 30% 的低效任务高亮红色警示，提示"资源浪费"。
+- `/billing/teams` 支持两级下钻：团队 → Pod 列表。
+- `/billing` 新增时间范围选择器（日 / 周 / 月），动态切换账单查询区间。
+
+---
 
 *   **单元测试：**
     - 计费公式测试：给定时长+池子+切片模式，验证金额计算是否符合预期。

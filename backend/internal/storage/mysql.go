@@ -20,6 +20,15 @@ type LifeTrace struct {
 	SlicingMode string     `gorm:"column:slicing_mode;type:varchar(32);not null"`
 	StartTime   time.Time  `gorm:"column:start_time;type:datetime;not null;index:idx_time"`
 	EndTime     *time.Time `gorm:"column:end_time;type:datetime"`
+	// 业务归属标签（从 Pod Labels 提取）
+	TeamLabel    string `gorm:"column:team_label;type:varchar(128)"`
+	ProjectLabel string `gorm:"column:project_label;type:varchar(128)"`
+	// 聚合指标持久化字段（Phase 2 指标缝合后回填）
+	GPUUtilAvg    float64 `gorm:"column:gpu_util_avg;type:float;default:0"`
+	GPUUtilMax    float64 `gorm:"column:gpu_util_max;type:float;default:0"`
+	MemUsedMax    uint64  `gorm:"column:mem_used_max;type:bigint;default:0"`
+	PowerUsageAvg float64 `gorm:"column:power_usage_avg;type:float;default:0"`
+	CostAmount    float64 `gorm:"column:cost_amount;type:decimal(12,4);default:0"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DeletedAt   gorm.DeletedAt `gorm:"index"`
@@ -29,6 +38,37 @@ type LifeTrace struct {
 func (LifeTrace) TableName() string {
 	return "life_trace"
 }
+
+// PoolPricing 资源池定价配置
+type PoolPricing struct {
+	ID                 uint    `gorm:"primaryKey"`
+	PoolID             string  `gorm:"column:pool_id;type:varchar(128);not null;uniqueIndex"`
+	GPUModel           string  `gorm:"column:gpu_model;type:varchar(64);not null"`
+	BasePricePerHour   float64 `gorm:"column:base_price_per_hour;type:decimal(10,4);not null"`
+	SlicingWeightFull  float64 `gorm:"column:slicing_weight_full;type:float;default:1.0"`
+	SlicingWeightMIG   float64 `gorm:"column:slicing_weight_mig;type:float;default:0.35"`
+	SlicingWeightMPS   float64 `gorm:"column:slicing_weight_mps;type:float;default:0.5"`
+	SlicingWeightTS    float64 `gorm:"column:slicing_weight_ts;type:float;default:0.6"`
+}
+
+func (PoolPricing) TableName() string { return "pool_pricing" }
+
+// DailyBillingSnapshot 日级账单聚合快照
+type DailyBillingSnapshot struct {
+	ID              uint      `gorm:"primaryKey"`
+	SnapshotDate    string    `gorm:"column:snapshot_date;type:date;not null;index:idx_snapshot"`
+	PoolID          string    `gorm:"column:pool_id;type:varchar(128);not null;index:idx_snapshot"`
+	Namespace       string    `gorm:"column:namespace;type:varchar(64);not null;index:idx_snapshot"`
+	TeamLabel       string    `gorm:"column:team_label;type:varchar(128)"`
+	TotalCost       float64   `gorm:"column:total_cost;type:decimal(12,4);default:0"`
+	AvgUtilP95      float64   `gorm:"column:avg_util_p95;type:float;default:0"`
+	MaxMemGiB       float64   `gorm:"column:max_mem_gib;type:float;default:0"`
+	PodSessionCount int       `gorm:"column:pod_session_count;type:int;default:0"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (DailyBillingSnapshot) TableName() string { return "daily_billing_snapshot" }
 
 type MySQLClient struct {
 	db *gorm.DB
@@ -57,7 +97,7 @@ func NewMySQLClient(dsn string) (*MySQLClient, error) {
 }
 
 func (m *MySQLClient) InitSchema() error {
-	return m.db.AutoMigrate(&LifeTrace{})
+	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{})
 }
 
 // TruncateTable 清空生命留痕表 (仅用于测试/Mock)
@@ -65,23 +105,66 @@ func (m *MySQLClient) TruncateTable() error {
 	return m.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&LifeTrace{}).Error
 }
 
+// GetPendingMetricsTraces 查询已结束但尚未缝合指标的 LifeTrace 记录
+func (m *MySQLClient) GetPendingMetricsTraces(limit int) ([]LifeTrace, error) {
+	var traces []LifeTrace
+	err := m.db.Where("end_time IS NOT NULL AND gpu_util_avg = 0").
+		Order("end_time DESC").
+		Limit(limit).
+		Find(&traces).Error
+	return traces, err
+}
+
+// UpdateLifeTraceMetrics 将离线缝合后的指标与费用持久化到 MySQL
+func (m *MySQLClient) UpdateLifeTraceMetrics(id uint, avgUtil, maxUtil float64, maxMem uint64, avgPower, cost float64) error {
+	return m.db.Model(&LifeTrace{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"gpu_util_avg":    avgUtil,
+			"gpu_util_max":    maxUtil,
+			"mem_used_max":    maxMem,
+			"power_usage_avg": avgPower,
+			"cost_amount":     cost,
+		}).Error
+}
+
+// GetPoolPricing 查询指定资源池的定价配置
+func (m *MySQLClient) GetPoolPricing(poolID string) (*PoolPricing, error) {
+	var pricing PoolPricing
+	err := m.db.Where("pool_id = ?", poolID).First(&pricing).Error
+	if err != nil {
+		return nil, err
+	}
+	return &pricing, nil
+}
+
+// SavePoolPricing 创建或更新资源池定价配置
+func (m *MySQLClient) SavePoolPricing(pricing *PoolPricing) error {
+	return m.db.Where(PoolPricing{PoolID: pricing.PoolID}).
+		Assign(*pricing).
+		FirstOrCreate(pricing).Error
+}
+
 func (m *MySQLClient) SaveLifeTrace(trace *types.PodTrace) error {
 	lt := &LifeTrace{
-		PodUID:      trace.PodUID,
-		Namespace:   trace.Namespace,
-		PodName:     trace.PodName,
-		NodeName:    trace.NodeName,
-		PoolID:      trace.PoolID,
-		SlicingMode: string(trace.SlicingMode),
-		StartTime:   trace.StartTime,
+		PodUID:       trace.PodUID,
+		Namespace:    trace.Namespace,
+		PodName:      trace.PodName,
+		NodeName:     trace.NodeName,
+		PoolID:       trace.PoolID,
+		SlicingMode:  string(trace.SlicingMode),
+		StartTime:    trace.StartTime,
+		TeamLabel:    trace.TeamLabel,
+		ProjectLabel: trace.ProjectLabel,
 	}
 
 	// 使用 Upsert 逻辑 (基于 PodUID)
 	return m.db.Where(LifeTrace{PodUID: lt.PodUID}).
 		Assign(LifeTrace{
-			NodeName:    lt.NodeName,
-			PoolID:      lt.PoolID,
-			SlicingMode: lt.SlicingMode,
+			NodeName:     lt.NodeName,
+			PoolID:       lt.PoolID,
+			SlicingMode:  lt.SlicingMode,
+			TeamLabel:    lt.TeamLabel,
+			ProjectLabel: lt.ProjectLabel,
 		}).
 		FirstOrCreate(lt).Error
 }
@@ -93,6 +176,76 @@ func (m *MySQLClient) CloseLifeTrace(namespace, podName string) error {
 		Order("start_time DESC").
 		Limit(1).
 		Update("end_time", &now).Error
+}
+
+// GetBillingSessions 查询指定日期的账单记录 (已结束的 Pod)
+func (m *MySQLClient) GetBillingSessions(dateStr, poolID, namespace, teamLabel string) ([]LifeTrace, error) {
+	startTime, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date format: %v", err)
+	}
+	endTime := startTime.Add(24 * time.Hour)
+
+	query := m.db.Model(&LifeTrace{}).
+		Where("end_time >= ? AND end_time < ?", startTime, endTime)
+
+	if poolID != "" {
+		query = query.Where("pool_id = ?", poolID)
+	}
+	if namespace != "" {
+		query = query.Where("namespace = ?", namespace)
+	}
+	if teamLabel != "" {
+		query = query.Where("team_label = ?", teamLabel)
+	}
+
+	var traces []LifeTrace
+	err = query.Order("end_time DESC").Find(&traces).Error
+	return traces, err
+}
+
+// UpsertDailySnapshot 插入或更新日级账单快照
+func (m *MySQLClient) UpsertDailySnapshot(snapshot *DailyBillingSnapshot) error {
+	// 根据唯一索引 (snapshot_date, pool_id, namespace) 进行 Upsert
+	return m.db.Where(DailyBillingSnapshot{
+		SnapshotDate: snapshot.SnapshotDate,
+		PoolID:       snapshot.PoolID,
+		Namespace:    snapshot.Namespace,
+	}).Assign(DailyBillingSnapshot{
+		TeamLabel:       snapshot.TeamLabel,
+		TotalCost:       snapshot.TotalCost,
+		AvgUtilP95:      snapshot.AvgUtilP95,
+		MaxMemGiB:       snapshot.MaxMemGiB,
+		PodSessionCount: snapshot.PodSessionCount,
+	}).FirstOrCreate(snapshot).Error
+}
+
+// GetDailySnapshots 查询日级账单快照
+func (m *MySQLClient) GetDailySnapshots(dateStr string) ([]DailyBillingSnapshot, error) {
+	var snapshots []DailyBillingSnapshot
+	query := m.db.Model(&DailyBillingSnapshot{})
+	if dateStr != "" {
+		query = query.Where("snapshot_date = ?", dateStr)
+	}
+	err := query.Order("snapshot_date DESC, total_cost DESC").Find(&snapshots).Error
+	return snapshots, err
+}
+
+// GetAllPoolPricing 获取所有资源池定价配置
+func (m *MySQLClient) GetAllPoolPricing() ([]PoolPricing, error) {
+	var pricing []PoolPricing
+	err := m.db.Find(&pricing).Error
+	return pricing, err
+}
+
+// RawExec 执行原始 SQL (仅用于演示/Mock)
+func (m *MySQLClient) RawExec(sql string) error {
+	return m.db.Exec(sql).Error
+}
+
+// SaveRawLifeTrace 直接保存完整的生命留痕记录 (包含聚合指标)
+func (m *MySQLClient) SaveRawLifeTrace(lt *LifeTrace) error {
+	return m.db.Create(lt).Error
 }
 
 func (m *MySQLClient) GetActivePodTrace(namespace, podName string) (*types.PodTrace, error) {
