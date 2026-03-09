@@ -36,6 +36,11 @@ func NewRedisClient(addr string, password string, db int) (*RedisClient, error) 
 	}, nil
 }
 
+// FlushDB 清空当前 Redis 数据库 (仅用于测试/Mock)
+func (r *RedisClient) FlushDB() error {
+	return r.client.FlushDB(r.ctx).Err()
+}
+
 func (r *RedisClient) SavePodTrace(pod *types.PodTrace) error {
 	key := fmt.Sprintf("pod_trace:%s:%s", pod.Namespace, pod.PodName)
 	data, err := json.Marshal(pod)

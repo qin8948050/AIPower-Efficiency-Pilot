@@ -60,6 +60,11 @@ func (m *MySQLClient) InitSchema() error {
 	return m.db.AutoMigrate(&LifeTrace{})
 }
 
+// TruncateTable 清空生命留痕表 (仅用于测试/Mock)
+func (m *MySQLClient) TruncateTable() error {
+	return m.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&LifeTrace{}).Error
+}
+
 func (m *MySQLClient) SaveLifeTrace(trace *types.PodTrace) error {
 	lt := &LifeTrace{
 		PodUID:      trace.PodUID,
