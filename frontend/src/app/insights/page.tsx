@@ -52,7 +52,7 @@ export default function InsightsPage() {
   const fetchReports = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/v3/insights/reports?limit=20");
+      const res = await fetch("http://localhost:8080/api/v3/insights/reports?limit=20");
       const data: ReportListResponse = await res.json();
       setReports(data.reports || []);
     } catch (error) {
@@ -65,7 +65,7 @@ export default function InsightsPage() {
   const generateReport = async () => {
     setGenerating(true);
     try {
-      const res = await fetch("/api/v3/insights/generate", {
+      const res = await fetch("http://localhost:8080/api/v3/insights/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ days: 7 }),
@@ -81,7 +81,7 @@ export default function InsightsPage() {
 
   const updateStatus = async (id: string, status: string) => {
     try {
-      await fetch(`/api/v3/insights/reports/${id}/status`, {
+      await fetch(`http://localhost:8080/api/v3/insights/reports/${id}/status`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
