@@ -86,11 +86,47 @@
 ---
 
 ## ⚪️ 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [待启动 💤]
-- [ ] **后端：数据脱水与 LLM 集成**：
-    - [ ] 编写统计降维逻辑，将历史监控数据压缩为适配 LLM 的"特征摘要"。
-    - [ ] 基于摘要数据驱动 Gemini/GPT 生成带根因分析的治理报告。
-- [ ] **前端：AI 诊断报告交互**：
-    - [ ] 实现 **"AI 专家建议卡片"**：展示治理根因、预期收益 (ROI) 及优化 Patch 预览。
+
+### 后端 - LLM 集成层
+- [ ] **创建 `backend/internal/llm/` 模块目录**
+- [ ] **实现数据脱水降维 (`summarizer.go`)**：
+    - [ ] 查询过去 7 天 `daily_billing_snapshot` 数据
+    - [ ] 按池子维度聚合统计特征（平均利用率、峰值、浪费成本）
+    - [ ] 识别低利用率 Pod 列表（< 30%）
+    - [ ] 识别高抖动 Pod 列表（Jitter > 15%）
+- [ ] **实现 AI 诊断引擎 (`analyzer.go`)**：
+    - [ ] 封装 LLM API 调用（支持 Gemini/GPT 配置切换）
+    - [ ] 构建诊断 Prompt 模板
+    - [ ] 解析 LLM 响应为结构化 `InsightReport`
+- [ ] **实现报告存储**：
+    - [ ] 新建 MySQL `insight_reports` 表
+    - [ ] 实现报告持久化与查询 API
+
+### 后端 - 管理 API
+- [ ] **注册 `/api/v3/` 路由组**
+- [ ] `POST /api/v3/insights/generate` - 手动触发诊断
+- [ ] `GET /api/v3/insights/reports` - 查询报告列表
+- [ ] `GET /api/v3/insights/reports/:id` - 查询报告详情
+- [ ] `PUT /api/v3/insights/reports/:id/status` - 更新报告状态（审批流）
+
+### 前端 - AI 诊断交互
+- [ ] **新增 AI 诊断页面** (`/insights/page.tsx`)：
+    - [ ] "生成诊断报告" 按钮
+    - [ ] 报告列表展示（卡片式）
+    - [ ] 报告详情展开面板
+- [ ] **新增 AI 专家建议卡片组件**：
+    - [ ] 展示治理根因
+    - [ ] 展示预期 ROI（年度节省金额）
+    - [ ] 展示优化 Patch 预览（JSON Diff）
+- [ ] **集成审批流交互**：
+    - [ ] "一键审批" 按钮
+    - [ ] "拒绝" 按钮
+    - [ ] 审批状态实时更新
+
+### 配置与测试
+- [ ] **配置管理**：在 `configs/config.yaml` 新增 LLM 配置项
+- [ ] **单元测试**：`llm/summarizer_test.go` - 降维算法测试
+- [ ] **集成测试**：`mock_data` 脚本预置低利用率/高抖动测试数据
 
 ## 🔴 第四阶段：可视化看板与闭环治理 (Governance & ROI)
 - [ ] **后端：治理执行器 (Pilot)**：

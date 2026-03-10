@@ -19,7 +19,6 @@
 ### 3. 项目管理与迭代
 - 📅 **[开发路线图 (Development Roadmap)](docs/development_roadmap.md)**：项目落地的规划蓝图与迭代周期。
 - ✅ **[详细开发任务清单 (Task List)](docs/tasks.md)**：实时记录各阶段具体的工程任务、待办事项与完成状态。
-*(未来规划：在此章节补充池化计费逻辑细化、1d 聚合引擎设计等相关文档)*
 
 ### 4. 开发与技术规范
 - 🛠️ **[开发规范文档 (Development Guidelines)](docs/development_guidelines.md)**：包含本项目的 Go/Go-Mod 后端规范、Next.js/TS 前端规范、Git 提交及 API 设计标准。
