@@ -14,7 +14,7 @@
     - [x] 配置 Redis 存储 5 分钟级能效快照，支撑 Dashboard 实时展示。
 - [x] **前端：基础架构与实时感知看板**：
     - [x] 初始化 Next.js + Tailwind + ShadcnUI 环境。
-    - [x] 实现 **"资源池实时大屏"**：动态展示当前各池子的 GPU 占用、型号及切分模式。
+    - [x] 实现 **"资源池实时大屏"**：动态展示当前各池子的 GPU 占用、型号及切分模式 (美观度优化完成)。
 - [x] **测试验证**：
     - [x] 单元测试：`kubernetes_test.go`（验证 Slicing Mode 识别与 GPU 提取逻辑）。
     - [x] 集成测试：`test_api.sh`（验证 `/api/v1/pools`, `/api/v1/traces` 接口）。

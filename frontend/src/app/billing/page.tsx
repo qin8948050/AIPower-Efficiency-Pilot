@@ -99,7 +99,10 @@ export default function BillingPage() {
   return (
     <div className="flex-1 space-y-4 p-8 pt-6">
       <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">成本分摊中心</h2>
+        <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <CreditCard className="h-8 w-8 text-blue-600" />
+          成本分摊中心
+        </h2>
         <div className="flex items-center space-x-2">
           <Badge variant="outline" className="px-3 py-1 text-sm">
             数据来源: 实时聚合
@@ -158,8 +161,7 @@ export default function BillingPage() {
         <Card className="col-span-4">
           <CardHeader>
             <CardTitle>算力成本趋势 (Daily)</CardTitle>
-            <CardDescription>最近日期的 GPU 算力支出分布</CardDescription>
-          </CardHeader>
+            <CardDescription className="text-sm text-muted-foreground">最近日期的 GPU 算力支出分布</CardDescription>          </CardHeader>
           <CardContent className="pl-2">
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -183,8 +185,7 @@ export default function BillingPage() {
         <Card className="col-span-3">
           <CardHeader>
             <CardTitle>资源池成本分担</CardTitle>
-            <CardDescription>各资源池累计支出占比</CardDescription>
-          </CardHeader>
+            <CardDescription className="text-sm text-muted-foreground">各资源池累计支出占比</CardDescription>          </CardHeader>
           <CardContent>
             <div className="h-[300px] w-full flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
@@ -215,19 +216,19 @@ export default function BillingPage() {
       <Card>
         <CardHeader>
           <CardTitle>最近结算记录</CardTitle>
-          <CardDescription>Pod 会话级账单明细</CardDescription>
+          <CardDescription className="text-sm text-muted-foreground">Pod 会话级账单明细</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Pod Name</TableHead>
-                <TableHead>Namespace</TableHead>
-                <TableHead>资源池</TableHead>
-                <TableHead>切片模式</TableHead>
-                <TableHead>开始时间</TableHead>
-                <TableHead>费用 (¥)</TableHead>
-                <TableHead className="text-right">状态</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">Pod Name</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">Namespace</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">资源池</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">切片模式</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">开始时间</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">费用 (¥)</TableHead>
+                <TableHead className="text-right text-xs font-semibold text-slate-600 uppercase">状态</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

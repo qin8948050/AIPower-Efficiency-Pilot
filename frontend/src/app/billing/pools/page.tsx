@@ -19,7 +19,17 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { DailyBillingSnapshot } from "@/lib/types";
-import { Box, BarChart3, Coins, Zap } from "lucide-react";
+import { 
+  Box, 
+  BarChart3, 
+  Zap, 
+  TrendingUp, 
+  Activity, 
+  Trophy, 
+  ArrowUpRight, 
+  Microchip,
+  Wallet
+} from "lucide-react";
 
 interface PoolEfficiency {
   poolID: string;
@@ -48,7 +58,8 @@ export default function PoolEfficiencyPage() {
             unitCost: 0,
           };
           current.totalCost += s.TotalCost;
-          current.avgUtilP95 = (current.avgUtilP95 + s.AvgUtilP95) / 2; // 简化平均
+          // 简单的加权平均逻辑 (实际生产中应按天数加权)
+          current.avgUtilP95 = (current.avgUtilP95 === 0) ? s.AvgUtilP95 : (current.avgUtilP95 + s.AvgUtilP95) / 2;
           current.maxMemGiB = Math.max(current.maxMemGiB, s.MaxMemGiB);
           current.sessionCount += s.PodSessionCount;
           map.set(s.PoolID, current);
@@ -56,90 +67,150 @@ export default function PoolEfficiencyPage() {
 
         const result = Array.from(map.values()).map(p => ({
           ...p,
-          unitCost: p.totalCost / (p.avgUtilP95 || 1) // 算出每 1% 利用率花了几块钱
+          unitCost: p.totalCost / (p.avgUtilP95 || 1)
         }));
-        setPools(result.sort((a, b) => b.totalCost - a.totalCost));
+        // 按单位成本升序排列 (越低越高效)
+        setPools(result.sort((a, b) => a.unitCost - b.unitCost));
       });
   }, []);
 
+  const topEfficiency = pools.length > 0 ? pools[0] : null;
+
   return (
-    <div className="flex-1 space-y-4 p-8 pt-6">
+    <div className="flex-1 space-y-6 p-8 pt-6 bg-slate-50/30 min-h-screen">
       <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-bold tracking-tight">资源池效能量化</h2>
+        <div className="space-y-1">
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+            <BarChart3 className="h-8 w-8 text-indigo-500" />
+            资源池效能量化
+          </h2>
+          <p className="text-sm text-muted-foreground flex items-center gap-1">
+            <Activity className="h-3 w-3" />
+            衡量每一分算力投入的真实产出，评估硬件采购的经济效益
+          </p>
+        </div>
+        <Badge variant="outline" className="px-4 py-1.5 text-sm bg-white border-indigo-100 text-indigo-700 shadow-sm font-medium">
+          核心指标: 单位算力成本 (¥/1%)
+        </Badge>
       </div>
 
+      {/* Hero ROI Cards */}
       <div className="grid gap-4 md:grid-cols-3">
-        {pools.slice(0, 3).map((p) => (
-          <Card key={p.poolID}>
+        {pools.slice(0, 3).map((p, idx) => (
+          <Card key={p.poolID} className={`relative overflow-hidden border-none shadow-lg text-white ${
+            idx === 0 ? "bg-gradient-to-br from-indigo-600 to-blue-700" : 
+            idx === 1 ? "bg-gradient-to-br from-blue-500 to-cyan-600" : 
+            "bg-gradient-to-br from-slate-700 to-slate-800"
+          }`}>
+            <div className="absolute right-[-10px] top-[-10px] opacity-10">
+              {idx === 0 ? <Trophy size={120} /> : <Box size={120} />}
+            </div>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <Box className="mr-2 h-4 w-4 text-blue-500" />
-                {p.poolID}
-              </CardTitle>
+              <div className="flex justify-between items-start">
+                <CardTitle className="text-sm font-medium flex items-center gap-2 opacity-90">
+                  {idx === 0 && <Trophy className="h-4 w-4 text-amber-300" />}
+                  {p.poolID}
+                </CardTitle>
+                <Badge className="bg-white/20 hover:bg-white/30 border-none text-white text-[10px]">
+                  RANK #{idx + 1}
+                </Badge>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">¥{p.totalCost.toFixed(2)}</div>
-              <div className="flex items-center mt-2 space-x-4 text-xs text-muted-foreground">
-                <span className="flex items-center">
-                  <BarChart3 className="mr-1 h-3 w-3" /> P95: {p.avgUtilP95.toFixed(1)}%
-                </span>
-                <span className="flex items-center">
-                  <Zap className="mr-1 h-3 w-3 text-amber-500" /> 单位成本: ¥{p.unitCost.toFixed(2)}
-                </span>
+              <div className="flex flex-col">
+                <span className="text-xs opacity-70 mb-1">单位算力成本 (ROI)</span>
+                <div className="text-3xl font-bold flex items-baseline gap-1">
+                  ¥{p.unitCost.toFixed(2)}
+                  <span className="text-xs font-normal opacity-80">/ 1% Util</span>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2 pt-4 border-t border-white/10 text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <Activity className="h-3 w-3 opacity-70" />
+                  P95: {p.avgUtilP95.toFixed(1)}%
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Wallet className="h-3 w-3 opacity-70" />
+                  总支出: ¥{Math.round(p.totalCost)}
+                </div>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>资源池 ROI 排名</CardTitle>
-          <CardDescription>
-            量化每个池子的算力性价比与显存使用效率
-          </CardDescription>
+      <Card className="border-slate-200 shadow-sm overflow-hidden bg-white">
+        <CardHeader className="border-b bg-slate-50/50">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg flex items-center text-slate-800">
+                <Microchip className="mr-2 h-5 w-5 text-blue-600" />
+                全量池效能 ROI 排名
+              </CardTitle>
+              <CardDescription className="text-sm text-muted-foreground">
+                单位成本越低说明该池子承载的任务与硬件能力匹配度越高
+              </CardDescription>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           <Table>
-            <TableHeader>
+            <TableHeader className="bg-slate-50/80">
               <TableRow>
-                <TableHead>资源池</TableHead>
-                <TableHead>总支出 (本期)</TableHead>
-                <TableHead>算力性价比 (单位成本)</TableHead>
-                <TableHead>GPU 利用率 (P95)</TableHead>
-                <TableHead>显存使用峰值</TableHead>
-                <TableHead className="text-right">健康度</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase py-4 pl-6">资源池标识</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">总支出 (本周期)</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">算力性价比 (单位成本)</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">利用流水位 (P95)</TableHead>
+                <TableHead className="text-xs font-semibold text-slate-600 uppercase">显存压力峰值</TableHead>
+                <TableHead className="text-right text-xs font-semibold text-slate-600 uppercase pr-6">效能健康度</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {pools.map((p) => (
-                <TableRow key={p.poolID}>
-                  <TableCell className="font-medium">{p.poolID}</TableCell>
-                  <TableCell>¥{p.totalCost.toFixed(2)}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-col">
-                      <span className="text-sm font-mono text-emerald-600">¥{p.unitCost.toFixed(2)} / 1%</span>
-                      <span className="text-[10px] text-muted-foreground">每单位算力支出</span>
+                <TableRow key={p.poolID} className="hover:bg-slate-50 transition-colors border-b last:border-none">
+                  <TableCell className="py-4 pl-6">
+                    <div className="font-bold text-slate-800">{p.poolID}</div>
+                    <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                      <Box className="h-3 w-3" />
+                      Session Count: {p.sessionCount}
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className="w-[120px] space-y-1">
-                      <div className="flex justify-between text-[10px]">
+                    <div className="font-semibold text-slate-700 font-mono">¥{p.totalCost.toFixed(2)}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-emerald-600 font-mono">¥{p.unitCost.toFixed(2)}</span>
+                        <ArrowUpRight className="h-3 w-3 text-emerald-500" />
+                      </div>
+                      <span className="text-[10px] text-slate-400">每产生 1% 算力的平均投入</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="w-[160px] space-y-1.5">
+                      <div className="flex justify-between items-center text-[10px] font-medium text-slate-500">
                         <span>P95 水位</span>
                         <span>{p.avgUtilP95.toFixed(1)}%</span>
                       </div>
-                      <Progress value={p.avgUtilP95} className="h-1.5" />
+                      <Progress 
+                        value={p.avgUtilP95} 
+                        className={`h-1.5 ${p.avgUtilP95 > 70 ? "[&>div]:bg-emerald-500" : p.avgUtilP95 > 30 ? "[&>div]:bg-blue-500" : "[&>div]:bg-rose-500"}`} 
+                      />
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium">{p.maxMemGiB.toFixed(1)} GiB</div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-bold text-slate-700">{p.maxMemGiB.toFixed(1)} <span className="text-[10px] font-normal text-slate-400 italic">GiB</span></span>
+                      <div className="text-[10px] text-slate-400">全周期最高水位</div>
+                    </div>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-right pr-6">
                     <Badge 
                       variant={p.avgUtilP95 > 60 ? "default" : p.avgUtilP95 > 30 ? "secondary" : "destructive"}
-                      className={p.avgUtilP95 > 60 ? "bg-emerald-500" : ""}
+                      className={`px-3 py-1 ${p.avgUtilP95 > 60 ? "bg-emerald-500 hover:bg-emerald-600" : ""}`}
                     >
-                      {p.avgUtilP95 > 60 ? "高效" : p.avgUtilP95 > 30 ? "一般" : "低效"}
+                      {p.avgUtilP95 > 60 ? "高效产出" : p.avgUtilP95 > 30 ? "能效一般" : "低性价比"}
                     </Badge>
                   </TableCell>
                 </TableRow>
@@ -148,6 +219,20 @@ export default function PoolEfficiencyPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Insight Alert */}
+      <div className="p-4 rounded-xl bg-indigo-50 border border-indigo-100 flex items-start gap-4">
+        <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600">
+          <Zap size={20} />
+        </div>
+        <div>
+          <h4 className="text-base font-bold text-indigo-900">效能提示 (ROI Insights)</h4>
+          <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+            当前 <strong>{topEfficiency?.poolID}</strong> 表现出最高的性价比。如果其他相同硬件型号的资源池（如 A100）单位成本显著更高，请关注其是否存在大量“显存长期占用但算力闲置”的任务。
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
+
