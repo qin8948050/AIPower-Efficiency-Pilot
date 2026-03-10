@@ -2,10 +2,26 @@
 
 import { useEffect, useState } from "react";
 import DashboardLayout from "../dashboard-layout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, RefreshCw, CheckCircle, XCircle, AlertTriangle, TrendingDown } from "lucide-react";
+import {
+  BrainCircuit,
+  Loader2,
+  RefreshCw,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  TrendingDown,
+  FileText,
+  DollarSign,
+} from "lucide-react";
 
 interface InsightReport {
   id: string;
@@ -39,7 +55,7 @@ export default function InsightsPage() {
     try {
       const res = await fetch("/api/v3/insights/reports?limit=20");
       const data: ReportListResponse = await res.json();
-      setReports(data.reports);
+      setReports(data.reports || []);
     } catch (error) {
       console.error("Failed to fetch reports:", error);
     } finally {
@@ -71,7 +87,7 @@ export default function InsightsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
-      setReports(reports.map(r => r.id === id ? { ...r, status } : r));
+      setReports(reports.map((r) => (r.id === id ? { ...r, status } : r)));
       if (selectedReport?.id === id) {
         setSelectedReport({ ...selectedReport, status });
       }
@@ -83,20 +99,43 @@ export default function InsightsPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "approved":
-        return <Badge className="bg-green-500"><CheckCircle className="w-3 h-3 mr-1" />已批准</Badge>;
+        return (
+          <Badge className="bg-green-500">
+            <CheckCircle className="w-3 h-3 mr-1" />
+            已批准
+          </Badge>
+        );
       case "rejected":
-        return <Badge className="bg-red-500"><XCircle className="w-3 h-3 mr-1" />已拒绝</Badge>;
+        return (
+          <Badge className="bg-red-500">
+            <XCircle className="w-3 h-3 mr-1" />
+            已拒绝
+          </Badge>
+        );
       default:
-        return <Badge className="bg-yellow-500"><AlertTriangle className="w-3 h-3 mr-1" />待审批</Badge>;
+        return (
+          <Badge className="bg-yellow-500">
+            <AlertTriangle className="w-3 h-3 mr-1" />
+            待审批
+          </Badge>
+        );
     }
   };
 
   const getReportTypeBadge = (type: string) => {
     switch (type) {
       case "downgrade":
-        return <Badge variant="outline" className="text-orange-500 border-orange-500">降级迁移</Badge>;
+        return (
+          <Badge variant="outline" className="text-orange-500 border-orange-500">
+            降级迁移
+          </Badge>
+        );
       case "isolation":
-        return <Badge variant="outline" className="text-blue-500 border-blue-500">稳定性升级</Badge>;
+        return (
+          <Badge variant="outline" className="text-blue-500 border-blue-500">
+            稳定性升级
+          </Badge>
+        );
       default:
         return <Badge variant="outline">一般建议</Badge>;
     }
@@ -120,186 +159,220 @@ export default function InsightsPage() {
     });
   };
 
+  const pendingCount = reports.filter((r) => r.status === "pending").length;
+  const totalSavings = reports.reduce((sum, r) => sum + r.est_savings, 0);
+
   return (
     <DashboardLayout>
-    <div className="space-y-6">
-      {/* 头部操作栏 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold">AI 诊断报告</h2>
-          <p className="text-muted-foreground">基于 LLM 的智能效能分析与优化建议</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchReports} disabled={loading}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-            刷新
-          </Button>
-          <Button onClick={generateReport} disabled={generating}>
-            {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <TrendingDown className="w-4 h-4 mr-2" />}
-            生成诊断报告
-          </Button>
-        </div>
-      </div>
-
-      {/* 统计卡片 */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">总报告数</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{reports.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">待审批</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-yellow-600">
-              {reports.filter(r => r.status === "pending").length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">预计年度节省</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              ${reports.reduce((sum, r) => sum + r.est_savings, 0).toFixed(2)}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 报告列表 */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* 报告卡片列表 */}
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold">诊断报告列表</h3>
-          {reports.length === 0 ? (
-            <Card>
-              <CardContent className="pt-6 text-center text-muted-foreground">
-                暂无诊断报告，请点击"生成诊断报告"创建
-              </CardContent>
-            </Card>
-          ) : (
-            reports.map((report) => (
-              <Card
-                key={report.id}
-                className={`cursor-pointer transition-all hover:shadow-md ${
-                  selectedReport?.id === report.id ? "ring-2 ring-primary" : ""
-                }`}
-                onClick={() => setSelectedReport(report)}
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {getReportTypeBadge(report.report_type)}
-                      {getStatusBadge(report.status)}
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDate(report.generated_at)}
-                    </span>
-                  </div>
-                  <CardTitle className="text-base mt-2">{report.pool_id}</CardTitle>
-                  <CardDescription className="line-clamp-2">{report.summary}</CardDescription>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">预计节省</span>
-                    <span className="font-semibold text-green-600">
-                      ${report.est_savings.toFixed(2)}/年
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
+      <div className="flex-1 space-y-4 p-8 pt-6">
+        {/* Header */}
+        <div className="flex items-center justify-between space-y-2">
+          <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <BrainCircuit className="h-8 w-8 text-purple-600" />
+            AI 诊断报告
+          </h2>
+          <div className="flex items-center space-x-2">
+            <Button variant="outline" size="sm" onClick={fetchReports} disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              刷新
+            </Button>
+            <Button size="sm" onClick={generateReport} disabled={generating}>
+              {generating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <TrendingDown className="h-4 w-4 mr-2" />}
+              生成诊断报告
+            </Button>
+          </div>
         </div>
 
-        {/* 报告详情面板 */}
-        <div>
-          {selectedReport ? (
-            <Card className="sticky top-4">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>报告详情</CardTitle>
-                  {getStatusBadge(selectedReport.status)}
+        {/* Summary Cards */}
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">总报告数</CardTitle>
+              <FileText className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{reports.length}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                历史诊断记录
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">待审批</CardTitle>
+              <AlertTriangle className="h-4 w-4 text-yellow-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-yellow-600">{pendingCount}</div>
+              <p className="text-xs text-muted-foreground mt-1">待人工确认</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">已批准</CardTitle>
+              <CheckCircle className="h-4 w-4 text-green-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-green-600">
+                {reports.filter((r) => r.status === "approved").length}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">已执行治理</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">预计年度节省</CardTitle>
+              <DollarSign className="h-4 w-4 text-green-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-green-600">${totalSavings.toFixed(2)}</div>
+              <p className="text-xs text-muted-foreground mt-1">预期成本节省</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Reports Grid */}
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+          {/* Report List */}
+          <Card className="col-span-4">
+            <CardHeader>
+              <CardTitle>诊断报告列表</CardTitle>
+              <CardDescription className="text-sm text-muted-foreground">
+                基于 LLM 的智能效能分析与优化建议
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {reports.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  暂无诊断报告，请点击"生成诊断报告"创建
                 </div>
-                <CardDescription>
+              ) : (
+                <div className="space-y-3">
+                  {reports.map((report) => (
+                    <div
+                      key={report.id}
+                      className={`p-4 border rounded-lg cursor-pointer transition-all hover:bg-slate-50 ${
+                        selectedReport?.id === report.id ? "border-primary bg-slate-50" : ""
+                      }`}
+                      onClick={() => setSelectedReport(report)}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          {getReportTypeBadge(report.report_type)}
+                          {getStatusBadge(report.status)}
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {formatDate(report.generated_at)}
+                        </span>
+                      </div>
+                      <div className="font-medium">{report.pool_id}</div>
+                      <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
+                        {report.summary}
+                      </div>
+                      <div className="text-sm mt-2">
+                        <span className="text-muted-foreground">预计节省: </span>
+                        <span className="font-semibold text-green-600">
+                          ${report.est_savings.toFixed(2)}/年
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Detail Panel */}
+          <Card className="col-span-3">
+            <CardHeader>
+              <CardTitle>报告详情</CardTitle>
+              {selectedReport && (
+                <CardDescription className="text-sm">
                   资源池: {selectedReport.pool_id} | 类型: {selectedReport.report_type}
                 </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* 根因分析 */}
-                <div>
-                  <h4 className="font-semibold mb-2">根因分析</h4>
-                  <p className="text-sm text-muted-foreground">{selectedReport.root_cause}</p>
-                </div>
+              )}
+            </CardHeader>
+            <CardContent>
+              {selectedReport ? (
+                <div className="space-y-6">
+                  {/* Status Badge */}
+                  <div className="flex items-center justify-between">
+                    {getStatusBadge(selectedReport.status)}
+                  </div>
 
-                {/* 优化动作 */}
-                <div>
-                  <h4 className="font-semibold mb-2">优化动作</h4>
-                  <div className="space-y-2">
-                    {parseActions(selectedReport.actions).map((action: any, idx: number) => (
-                      <div key={idx} className="p-3 bg-muted rounded-lg text-sm">
-                        <div className="flex items-center justify-between mb-1">
-                          <Badge variant="outline">{action.type}</Badge>
-                          <span className="font-mono text-xs">{action.from_pool} → {action.to_pool}</span>
+                  {/* Summary */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2">摘要</h4>
+                    <p className="text-sm text-muted-foreground">{selectedReport.summary}</p>
+                  </div>
+
+                  {/* Root Cause */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2">根因分析</h4>
+                    <p className="text-sm text-muted-foreground">{selectedReport.root_cause}</p>
+                  </div>
+
+                  {/* Actions */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2">优化动作</h4>
+                    <div className="space-y-2">
+                      {parseActions(selectedReport.actions).map((action: any, idx: number) => (
+                        <div key={idx} className="p-3 bg-muted rounded-lg text-sm">
+                          <div className="flex items-center justify-between mb-1">
+                            <Badge variant="outline">{action.type}</Badge>
+                            <span className="font-mono text-xs">
+                              {action.from_pool} → {action.to_pool}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground">
+                            {action.namespace}/{action.pod_name}
+                          </div>
                         </div>
-                        <div className="text-muted-foreground">
-                          {action.namespace}/{action.pod_name}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {/* 预期收益 */}
-                <div className="p-4 bg-green-50 rounded-lg">
-                  <div className="flex items-center gap-2 text-green-700">
-                    <TrendingDown className="w-5 h-5" />
-                    <span className="font-semibold">预期年度节省</span>
+                  {/* Est Savings */}
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <TrendingDown className="h-5 w-5" />
+                      <span className="font-semibold">预期年度节省</span>
+                    </div>
+                    <div className="text-2xl font-bold text-green-700 mt-1">
+                      ${selectedReport.est_savings.toFixed(2)}
+                    </div>
                   </div>
-                  <div className="text-2xl font-bold text-green-700 mt-1">
-                    ${selectedReport.est_savings.toFixed(2)}
-                  </div>
-                </div>
 
-                {/* 审批操作 */}
-                {selectedReport.status === "pending" && (
-                  <div className="flex gap-2 pt-4 border-t">
-                    <Button
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => updateStatus(selectedReport.id, "approved")}
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      批准执行
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      className="flex-1"
-                      onClick={() => updateStatus(selectedReport.id, "rejected")}
-                    >
-                      <XCircle className="w-4 h-4 mr-2" />
-                      拒绝
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="pt-6 text-center text-muted-foreground h-64 flex items-center justify-center">
-                选择左侧报告查看详情
-              </CardContent>
-            </Card>
-          )}
+                  {/* Actions Buttons */}
+                  {selectedReport.status === "pending" && (
+                    <div className="flex gap-2 pt-4 border-t">
+                      <Button
+                        className="flex-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => updateStatus(selectedReport.id, "approved")}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        批准执行
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="flex-1"
+                        onClick={() => updateStatus(selectedReport.id, "rejected")}
+                      >
+                        <XCircle className="h-4 w-4 mr-2" />
+                        拒绝
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  选择左侧报告查看详情
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
-    </div>
     </DashboardLayout>
   );
 }
