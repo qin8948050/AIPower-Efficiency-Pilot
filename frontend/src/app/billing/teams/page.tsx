@@ -297,7 +297,7 @@ export default function TeamsPage() {
                   <Tooltip
                     cursor={{ fill: '#f8fafc' }}
                     contentStyle={{ borderRadius: "8px", border: "none", boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)" }}
-                    formatter={(value: number) => [`¥${value.toFixed(2)}`, "成本金额"]}
+                    formatter={(value) => [`¥${Number(value).toFixed(2)}`, "成本金额"]}
                   />
                   <Bar dataKey="cost" fill="#6366f1" radius={[0, 4, 4, 0]} barSize={24} />
                 </BarChart>
@@ -331,7 +331,7 @@ export default function TeamsPage() {
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v: number) => `¥${v.toFixed(2)}`} />
+                  <Tooltip formatter={(v) => `¥${Number(v).toFixed(2)}`} />
                   <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{fontSize: '11px', fontWeight: 'bold'}} />
                 </PieChart>
               </ResponsiveContainer>

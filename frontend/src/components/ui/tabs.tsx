@@ -30,9 +30,10 @@ const TabsList = ({ children, className, activeValue, onValueChange }: any) => (
   <div className={cn("inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground", className)}>
     {React.Children.map(children, (child) => {
       if (React.isValidElement(child)) {
-        return React.cloneElement(child as React.ReactElement<any>, { 
-          isActive: child.props.value === activeValue,
-          onClick: () => onValueChange(child.props.value)
+        const childProps = child.props as { value?: string }
+        return React.cloneElement(child as React.ReactElement<any>, {
+          isActive: childProps.value === activeValue,
+          onClick: () => onValueChange(childProps.value)
         })
       }
       return child

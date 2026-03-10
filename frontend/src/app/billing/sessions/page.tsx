@@ -191,7 +191,7 @@ export default function SessionsPage() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6 p-6 bg-white rounded-xl border border-slate-200 shadow-inner animate-in fade-in slide-in-from-top-2 duration-300">
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest px-1">命名空间</label>
-                  <Select value={filters.namespace} onValueChange={(val) => setFilters({ ...filters, namespace: val })}>
+                  <Select value={filters.namespace} onValueChange={(val: string) => setFilters({ ...filters, namespace: val })}>
                     <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">全部命名空间</SelectItem>
@@ -201,7 +201,7 @@ export default function SessionsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest px-1">算力池</label>
-                  <Select value={filters.poolID} onValueChange={(val) => setFilters({ ...filters, poolID: val })}>
+                  <Select value={filters.poolID} onValueChange={(val: string) => setFilters({ ...filters, poolID: val })}>
                     <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">全部算力资源池</SelectItem>
@@ -211,7 +211,7 @@ export default function SessionsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest px-1">切分模式</label>
-                  <Select value={filters.mode} onValueChange={(val) => setFilters({ ...filters, mode: val })}>
+                  <Select value={filters.mode} onValueChange={(val: string) => setFilters({ ...filters, mode: val })}>
                     <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">全部虚拟化模式</SelectItem>
@@ -221,7 +221,7 @@ export default function SessionsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest px-1">结算状态</label>
-                  <Select value={filters.status} onValueChange={(val) => setFilters({ ...filters, status: val })}>
+                  <Select value={filters.status} onValueChange={(val: string) => setFilters({ ...filters, status: val })}>
                     <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">不限结算状态</SelectItem>

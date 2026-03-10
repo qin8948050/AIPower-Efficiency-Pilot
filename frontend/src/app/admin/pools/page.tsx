@@ -174,7 +174,7 @@ export default function ResourcePoolAdminPage() {
                   <TableCell className="w-[180px] space-y-2">
                     <Select 
                       defaultValue={p.Scene}
-                      onValueChange={(val) => (pools[idx].Scene = val)}
+                      onValueChange={(val: string) => (pools[idx].Scene = val)}
                     >
                       <SelectTrigger className="h-9 text-xs border-slate-200">
                         <SelectValue />

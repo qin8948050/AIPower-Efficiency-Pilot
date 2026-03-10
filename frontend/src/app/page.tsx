@@ -200,8 +200,8 @@ export default function DashboardPage() {
                       </TableCell>
                       <TableCell>
                         <div className={`flex items-center gap-1.5 font-mono text-sm font-semibold ${
-                            trace.metrics?.gpu_util_avg > 70 ? 'text-emerald-600' :
-                            trace.metrics?.gpu_util_avg > 30 ? 'text-amber-600' :
+                            (trace.metrics?.gpu_util_avg ?? 0) > 70 ? 'text-emerald-600' :
+                            (trace.metrics?.gpu_util_avg ?? 0) > 30 ? 'text-amber-600' :
                             'text-rose-600'
                         }`}>
                           <Zap className="h-3 w-3" />
