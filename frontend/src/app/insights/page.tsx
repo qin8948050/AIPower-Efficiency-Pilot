@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import DashboardLayout from "../dashboard-layout";
 import {
   Card,
   CardContent,
@@ -160,219 +159,214 @@ export default function InsightsPage() {
   };
 
   const pendingCount = reports.filter((r) => r.status === "pending").length;
+  const approvedCount = reports.filter((r) => r.status === "approved").length;
   const totalSavings = reports.reduce((sum, r) => sum + r.est_savings, 0);
 
   return (
-    <DashboardLayout>
-      <div className="flex-1 space-y-4 p-8 pt-6">
-        {/* Header */}
-        <div className="flex items-center justify-between space-y-2">
-          <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <BrainCircuit className="h-8 w-8 text-purple-600" />
-            AI 诊断报告
-          </h2>
-          <div className="flex items-center space-x-2">
-            <Button variant="outline" size="sm" onClick={fetchReports} disabled={loading}>
-              {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-              刷新
-            </Button>
-            <Button size="sm" onClick={generateReport} disabled={generating}>
-              {generating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <TrendingDown className="h-4 w-4 mr-2" />}
-              生成诊断报告
-            </Button>
-          </div>
-        </div>
-
-        {/* Summary Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">总报告数</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{reports.length}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                历史诊断记录
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">待审批</CardTitle>
-              <AlertTriangle className="h-4 w-4 text-yellow-500" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-yellow-600">{pendingCount}</div>
-              <p className="text-xs text-muted-foreground mt-1">待人工确认</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">已批准</CardTitle>
-              <CheckCircle className="h-4 w-4 text-green-500" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-green-600">
-                {reports.filter((r) => r.status === "approved").length}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">已执行治理</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">预计年度节省</CardTitle>
-              <DollarSign className="h-4 w-4 text-green-500" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-green-600">${totalSavings.toFixed(2)}</div>
-              <p className="text-xs text-muted-foreground mt-1">预期成本节省</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Reports Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-          {/* Report List */}
-          <Card className="col-span-4">
-            <CardHeader>
-              <CardTitle>诊断报告列表</CardTitle>
-              <CardDescription className="text-sm text-muted-foreground">
-                基于 LLM 的智能效能分析与优化建议
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {reports.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  暂无诊断报告，请点击"生成诊断报告"创建
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {reports.map((report) => (
-                    <div
-                      key={report.id}
-                      className={`p-4 border rounded-lg cursor-pointer transition-all hover:bg-slate-50 ${
-                        selectedReport?.id === report.id ? "border-primary bg-slate-50" : ""
-                      }`}
-                      onClick={() => setSelectedReport(report)}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          {getReportTypeBadge(report.report_type)}
-                          {getStatusBadge(report.status)}
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {formatDate(report.generated_at)}
-                        </span>
-                      </div>
-                      <div className="font-medium">{report.pool_id}</div>
-                      <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
-                        {report.summary}
-                      </div>
-                      <div className="text-sm mt-2">
-                        <span className="text-muted-foreground">预计节省: </span>
-                        <span className="font-semibold text-green-600">
-                          ${report.est_savings.toFixed(2)}/年
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Detail Panel */}
-          <Card className="col-span-3">
-            <CardHeader>
-              <CardTitle>报告详情</CardTitle>
-              {selectedReport && (
-                <CardDescription className="text-sm">
-                  资源池: {selectedReport.pool_id} | 类型: {selectedReport.report_type}
-                </CardDescription>
-              )}
-            </CardHeader>
-            <CardContent>
-              {selectedReport ? (
-                <div className="space-y-6">
-                  {/* Status Badge */}
-                  <div className="flex items-center justify-between">
-                    {getStatusBadge(selectedReport.status)}
-                  </div>
-
-                  {/* Summary */}
-                  <div>
-                    <h4 className="text-sm font-semibold mb-2">摘要</h4>
-                    <p className="text-sm text-muted-foreground">{selectedReport.summary}</p>
-                  </div>
-
-                  {/* Root Cause */}
-                  <div>
-                    <h4 className="text-sm font-semibold mb-2">根因分析</h4>
-                    <p className="text-sm text-muted-foreground">{selectedReport.root_cause}</p>
-                  </div>
-
-                  {/* Actions */}
-                  <div>
-                    <h4 className="text-sm font-semibold mb-2">优化动作</h4>
-                    <div className="space-y-2">
-                      {parseActions(selectedReport.actions).map((action: any, idx: number) => (
-                        <div key={idx} className="p-3 bg-muted rounded-lg text-sm">
-                          <div className="flex items-center justify-between mb-1">
-                            <Badge variant="outline">{action.type}</Badge>
-                            <span className="font-mono text-xs">
-                              {action.from_pool} → {action.to_pool}
-                            </span>
-                          </div>
-                          <div className="text-muted-foreground">
-                            {action.namespace}/{action.pod_name}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Est Savings */}
-                  <div className="p-4 bg-green-50 rounded-lg">
-                    <div className="flex items-center gap-2 text-green-700">
-                      <TrendingDown className="h-5 w-5" />
-                      <span className="font-semibold">预期年度节省</span>
-                    </div>
-                    <div className="text-2xl font-bold text-green-700 mt-1">
-                      ${selectedReport.est_savings.toFixed(2)}
-                    </div>
-                  </div>
-
-                  {/* Actions Buttons */}
-                  {selectedReport.status === "pending" && (
-                    <div className="flex gap-2 pt-4 border-t">
-                      <Button
-                        className="flex-1 bg-green-600 hover:bg-green-700"
-                        onClick={() => updateStatus(selectedReport.id, "approved")}
-                      >
-                        <CheckCircle className="h-4 w-4 mr-2" />
-                        批准执行
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        className="flex-1"
-                        onClick={() => updateStatus(selectedReport.id, "rejected")}
-                      >
-                        <XCircle className="h-4 w-4 mr-2" />
-                        拒绝
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  选择左侧报告查看详情
-                </div>
-              )}
-            </CardContent>
-          </Card>
+    <div className="flex-1 space-y-4 p-8 pt-6">
+      {/* Header */}
+      <div className="flex items-center justify-between space-y-2">
+        <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <BrainCircuit className="h-8 w-8 text-purple-600" />
+          AI 诊断报告
+        </h2>
+        <div className="flex items-center space-x-2">
+          <Button variant="outline" size="sm" onClick={fetchReports} disabled={loading}>
+            {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            刷新
+          </Button>
+          <Button size="sm" onClick={generateReport} disabled={generating}>
+            {generating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <TrendingDown className="h-4 w-4 mr-2" />}
+            生成诊断报告
+          </Button>
         </div>
       </div>
-    </DashboardLayout>
+
+      {/* Summary Cards */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">总报告数</CardTitle>
+            <FileText className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{reports.length}</div>
+            <p className="text-xs text-muted-foreground mt-1">历史诊断记录</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">待审批</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-yellow-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-yellow-600">{pendingCount}</div>
+            <p className="text-xs text-muted-foreground mt-1">待人工确认</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">已批准</CardTitle>
+            <CheckCircle className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{approvedCount}</div>
+            <p className="text-xs text-muted-foreground mt-1">已执行治理</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">预计年度节省</CardTitle>
+            <DollarSign className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">${totalSavings.toFixed(2)}</div>
+            <p className="text-xs text-muted-foreground mt-1">预期成本节省</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Reports Grid */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+        {/* Report List */}
+        <Card className="col-span-4">
+          <CardHeader>
+            <CardTitle>诊断报告列表</CardTitle>
+            <CardDescription className="text-sm text-muted-foreground">
+              基于 LLM 的智能效能分析与优化建议
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {reports.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                暂无诊断报告，请点击"生成诊断报告"创建
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {reports.map((report) => (
+                  <div
+                    key={report.id}
+                    className={`p-4 border rounded-lg cursor-pointer transition-all hover:bg-slate-50 ${
+                      selectedReport?.id === report.id ? "border-primary bg-slate-50" : ""
+                    }`}
+                    onClick={() => setSelectedReport(report)}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        {getReportTypeBadge(report.report_type)}
+                        {getStatusBadge(report.status)}
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {formatDate(report.generated_at)}
+                      </span>
+                    </div>
+                    <div className="font-medium">{report.pool_id}</div>
+                    <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
+                      {report.summary}
+                    </div>
+                    <div className="text-sm mt-2">
+                      <span className="text-muted-foreground">预计节省: </span>
+                      <span className="font-semibold text-green-600">
+                        ${report.est_savings.toFixed(2)}/年
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Detail Panel */}
+        <Card className="col-span-3">
+          <CardHeader>
+            <CardTitle>报告详情</CardTitle>
+            {selectedReport && (
+              <CardDescription className="text-sm">
+                资源池: {selectedReport.pool_id} | 类型: {selectedReport.report_type}
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent>
+            {selectedReport ? (
+              <div className="space-y-6">
+                {/* Status Badge */}
+                <div className="flex items-center justify-between">
+                  {getStatusBadge(selectedReport.status)}
+                </div>
+
+                {/* Summary */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">摘要</h4>
+                  <p className="text-sm text-muted-foreground">{selectedReport.summary}</p>
+                </div>
+
+                {/* Root Cause */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">根因分析</h4>
+                  <p className="text-sm text-muted-foreground">{selectedReport.root_cause}</p>
+                </div>
+
+                {/* Actions */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">优化动作</h4>
+                  <div className="space-y-2">
+                    {parseActions(selectedReport.actions).map((action: any, idx: number) => (
+                      <div key={idx} className="p-3 bg-muted rounded-lg text-sm">
+                        <div className="flex items-center justify-between mb-1">
+                          <Badge variant="outline">{action.type}</Badge>
+                          <span className="font-mono text-xs">
+                            {action.from_pool} → {action.to_pool}
+                          </span>
+                        </div>
+                        <div className="text-muted-foreground">
+                          {action.namespace}/{action.pod_name}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Est Savings */}
+                <div className="p-4 bg-green-50 rounded-lg">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <TrendingDown className="h-5 w-5" />
+                    <span className="font-semibold">预期年度节省</span>
+                  </div>
+                  <div className="text-2xl font-bold text-green-700 mt-1">
+                    ${selectedReport.est_savings.toFixed(2)}
+                  </div>
+                </div>
+
+                {/* Actions Buttons */}
+                {selectedReport.status === "pending" && (
+                  <div className="flex gap-2 pt-4 border-t">
+                    <Button
+                      className="flex-1 bg-green-600 hover:bg-green-700"
+                      onClick={() => updateStatus(selectedReport.id, "approved")}
+                    >
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      批准执行
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      className="flex-1"
+                      onClick={() => updateStatus(selectedReport.id, "rejected")}
+                    >
+                      <XCircle className="h-4 w-4 mr-2" />
+                      拒绝
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                选择左侧报告查看详情
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 }
