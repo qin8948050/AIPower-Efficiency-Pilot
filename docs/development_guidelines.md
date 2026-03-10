@@ -31,7 +31,7 @@
 
 ### 2.1 提交信息格式 (Conventional Commits)
 每次提交必须遵循以下格式：
-`<type>(<scope>): <subject>`
+`<type>: <subject>`
 
 - **type** 类型包含：
     - `feat`: 新功能
@@ -42,7 +42,8 @@
     - `perf`: 性能优化
     - `build`: 编译系统或外部依赖变更
     - `ci`: CI 配置变更
-- **subject**: 简要描述（中文）。
+    - `chore`: 杂项维护类提交
+- **subject**: 简要描述（English）。
 
 ### 2.2 分支模型
 - `main`: 稳定主分支，仅接受从 `develop` 发起的 PR。

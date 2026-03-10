@@ -63,25 +63,25 @@
 
 ---
 
-## 🟡 第二阶段补全：资源池资产管理 (Resource Asset Management) - [进行中 🚀]
+## 🟢 第二阶段补全：资源池资产管理 (Resource Asset Management) - [已完结 ✅]
 
 ### 后端 - 资产自动发现
-- [ ] MySQL 新建 `resource_pool` 元数据表。
-- [ ] 修改 `K8sCollector.handleNode`：实现发现新 Pool-ID 时自动 Upsert 资产记录。
-- [ ] 实现 `UpdateResourcePoolMetadata` 方法：支持手动补充业务描述。
+- [x] MySQL 新建 `resource_pool` 元数据表。
+- [x] 修改 `K8sCollector.handleNode`：实现发现新 Pool-ID 时自动 Upsert 资产记录。
+- [x] 实现 `UpdateResourcePoolMetadata` 方法：支持手动补充业务描述。
 
 ### 后端 - 管理 API
-- [ ] `GET /api/v2/pools`：获取全量已感知的资源池资产列表。
-- [ ] `PUT /api/v2/pools/:id`：更新资源池业务元数据（别名、场景、备注）。
+- [x] `GET /api/v2/pools`：获取全量已感知的资源池资产列表。
+- [x] `PUT /api/v2/pools/:id`：更新资源池业务元数据（别名、场景、备注）。
 
 ### 前端 - 资产盘点
-- [ ] **新增资源池资产清单页** (`/admin/pools/page.tsx`)：
-    - [ ] 表格化展示已感知的池子。
-    - [ ] 支持行内编辑业务别名与场景说明。
-- [ ] **侧边栏导航**：在“配置中心”增加“资源池资产管理”入口。
+- [x] **新增资源池资产清单页** (`/admin/pools/page.tsx`)：
+    - [x] 表格化展示已感知的池子。
+    - [x] 支持行内编辑业务别名与场景说明。
+- [x] **侧边栏导航**：在“配置中心”增加“资源池资产管理”入口。
 
 ### 测试增强
-- [ ] **Mock 脚本升级**：根据命名矩阵预置标准测试池子。
+- [x] **Mock 脚本升级**：根据命名矩阵预置标准测试池子。
 
 ---
 
