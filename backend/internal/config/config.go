@@ -13,6 +13,7 @@ type Config struct {
 	MySQL      MySQLConfig      `mapstructure:"mysql"`
 	Prometheus PrometheusConfig `mapstructure:"prometheus"`
 	K8s        K8sConfig        `mapstructure:"k8s"`
+	LLM        LLMConfig        `mapstructure:"llm"`
 }
 
 type ServerConfig struct {
@@ -35,6 +36,15 @@ type PrometheusConfig struct {
 
 type K8sConfig struct {
 	Kubeconfig string `mapstructure:"kubeconfig"`
+}
+
+type LLMConfig struct {
+	Provider   string `mapstructure:"provider"`   // "gemini", "openai"
+	APIKey     string `mapstructure:"api_key"`
+	Model      string `mapstructure:"model"`       // "gemini-pro", "gpt-4"
+	Endpoint   string `mapstructure:"endpoint"`    // 自定义端点
+	MaxTokens  int    `mapstructure:"max_tokens"`  // 最大 token 数
+	Temperature float64 `mapstructure:"temperature"` // 温度参数
 }
 
 func LoadConfig(configPath string) (*Config, error) {

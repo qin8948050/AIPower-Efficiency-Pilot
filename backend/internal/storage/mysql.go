@@ -114,7 +114,7 @@ type ResourcePool struct {
 func (ResourcePool) TableName() string { return "resource_pool" }
 
 func (m *MySQLClient) InitSchema() error {
-	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{})
+	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{}, &InsightReport{})
 }
 
 // UpsertResourcePool 发现新池子时自动创建或更新硬指标 (型号、特性、模式)
@@ -293,6 +293,101 @@ func (m *MySQLClient) RawExec(sql string) error {
 // SaveRawLifeTrace 直接保存完整的生命留痕记录 (包含聚合指标)
 func (m *MySQLClient) SaveRawLifeTrace(lt *LifeTrace) error {
 	return m.db.Create(lt).Error
+}
+
+// GetDailySnapshotsByPool 查询指定资源池的日级账单快照（用于 LLM 摘要）
+func (m *MySQLClient) GetDailySnapshotsByPool(poolID string, startDate, endDate time.Time) ([]DailyBillingSnapshot, error) {
+	var snapshots []DailyBillingSnapshot
+	err := m.db.Where("pool_id = ? AND snapshot_date >= ? AND snapshot_date < ?", poolID, startDate.Format("2006-01-02"), endDate.Format("2006-01-02")).
+		Order("snapshot_date DESC").
+		Find(&snapshots).Error
+	return snapshots, err
+}
+
+// GetPodTracesByPool 查询指定资源池的 Pod 记录
+func (m *MySQLClient) GetPodTracesByPool(poolID string, startDate, endDate time.Time) ([]LifeTrace, error) {
+	var traces []LifeTrace
+	err := m.db.Where("pool_id = ? AND start_time >= ? AND start_time < ?", poolID, startDate, endDate).
+		Order("start_time DESC").
+		Find(&traces).Error
+	return traces, err
+}
+
+// GetPodTracesByPoolAndUtil 查询指定资源池中利用率低于阈值的 Pod
+func (m *MySQLClient) GetPodTracesByPoolAndUtil(poolID string, startDate, endDate time.Time, maxUtil float64) ([]LifeTrace, error) {
+	var traces []LifeTrace
+	err := m.db.Where("pool_id = ? AND start_time >= ? AND start_time < ? AND gpu_util_avg < ?", poolID, startDate, endDate, maxUtil).
+		Order("gpu_util_avg ASC").
+		Find(&traces).Error
+	return traces, err
+}
+
+// GetResourcePool 获取单个资源池信息
+func (m *MySQLClient) GetResourcePool(poolID string) (*ResourcePool, error) {
+	var pool ResourcePool
+	err := m.db.Where("pool_id = ?", poolID).First(&pool).Error
+	if err != nil {
+		return nil, err
+	}
+	return &pool, nil
+}
+
+// InsightReport AI 诊断报告模型
+type InsightReport struct {
+	ID          uint      `gorm:"primaryKey"`
+	GeneratedAt time.Time `gorm:"column:generated_at"`
+	PoolID      string    `gorm:"column:pool_id;index"`
+	ReportType  string    `gorm:"column:report_type"`
+	Summary     string    `gorm:"column:summary;type:text"`
+	RootCause   string    `gorm:"column:root_cause;type:text"`
+	Actions     string    `gorm:"column:actions;type:text"`
+	EstSavings  float64   `gorm:"column:est_savings"`
+	Status      string    `gorm:"column:status;default:'pending'"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (InsightReport) TableName() string {
+	return "insight_reports"
+}
+
+// SaveInsightReport 保存诊断报告
+func (m *MySQLClient) SaveInsightReport(report *InsightReport) error {
+	return m.db.Create(report).Error
+}
+
+// GetInsightReports 获取诊断报告列表
+func (m *MySQLClient) GetInsightReports(poolID string, limit, offset int) ([]InsightReport, int64, error) {
+	var reports []InsightReport
+	var total int64
+
+	query := m.db.Model(&InsightReport{})
+	if poolID != "" {
+		query = query.Where("pool_id = ?", poolID)
+	}
+
+	err := query.Count(&total).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	err = query.Order("generated_at DESC").Limit(limit).Offset(offset).Find(&reports).Error
+	return reports, total, err
+}
+
+// GetInsightReportByID 获取单个报告
+func (m *MySQLClient) GetInsightReportByID(id uint) (*InsightReport, error) {
+	var report InsightReport
+	err := m.db.Where("id = ?", id).First(&report).Error
+	if err != nil {
+		return nil, err
+	}
+	return &report, nil
+}
+
+// UpdateInsightReportStatus 更新报告状态
+func (m *MySQLClient) UpdateInsightReportStatus(id uint, status string) error {
+	return m.db.Model(&InsightReport{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func (m *MySQLClient) GetActivePodTrace(namespace, podName string) (*types.PodTrace, error) {

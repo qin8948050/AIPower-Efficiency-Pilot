@@ -4,10 +4,12 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/qxw/aipower-efficiency-pilot/internal/aggregator"
 	"github.com/qxw/aipower-efficiency-pilot/internal/config"
+	"github.com/qxw/aipower-efficiency-pilot/internal/llm"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
 	"time"
 )
@@ -266,6 +268,117 @@ func main() {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"status": "metadata updated"})
+		})
+	}
+
+	// Phase 3: LLM Insights API
+	insightsAnalyzer := llm.NewAnalyzer(mysqlCli, &cfg.LLM)
+
+	v3 := r.Group("/api/v3")
+	{
+		// 触发 AI 诊断分析
+		v3.POST("/insights/generate", func(c *gin.Context) {
+			var req llm.GenerateRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				req.Days = 7 // 默认 7 天
+			}
+
+			report, err := insightsAnalyzer.GenerateReport(req.PoolID, req.Days)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, report)
+		})
+
+		// 获取报告列表
+		v3.GET("/insights/reports", func(c *gin.Context) {
+			poolID := c.Query("pool_id")
+			limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+			offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+			reports, total, err := mysqlCli.GetInsightReports(poolID, limit, offset)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			// 转换为 API 响应格式
+			var reportList []llm.InsightReport
+			for _, r := range reports {
+				reportList = append(reportList, llm.InsightReport{
+					ID:          strconv.FormatUint(uint64(r.ID), 10),
+					GeneratedAt: r.GeneratedAt,
+					PoolID:      r.PoolID,
+					ReportType:  r.ReportType,
+					Summary:     r.Summary,
+					RootCause:   r.RootCause,
+					Actions:     r.Actions,
+					EstSavings:  r.EstSavings,
+					Status:      r.Status,
+				})
+			}
+
+			c.JSON(http.StatusOK, llm.ReportListResponse{
+				Reports: reportList,
+				Total:   total,
+			})
+		})
+
+		// 获取报告详情
+		v3.GET("/insights/reports/:id", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+				return
+			}
+
+			report, err := mysqlCli.GetInsightReportByID(uint(id))
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "report not found"})
+				return
+			}
+
+			c.JSON(http.StatusOK, llm.InsightReport{
+				ID:          strconv.FormatUint(uint64(report.ID), 10),
+				GeneratedAt: report.GeneratedAt,
+				PoolID:      report.PoolID,
+				ReportType:  report.ReportType,
+				Summary:     report.Summary,
+				RootCause:   report.RootCause,
+				Actions:     report.Actions,
+				EstSavings:  report.EstSavings,
+				Status:      report.Status,
+			})
+		})
+
+		// 更新报告状态（审批流）
+		v3.PUT("/insights/reports/:id/status", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+				return
+			}
+
+			var req struct {
+				Status string `json:"status"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			if req.Status != "approved" && req.Status != "rejected" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+				return
+			}
+
+			if err := mysqlCli.UpdateInsightReportStatus(uint(id), req.Status); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 		})
 	}
 

@@ -81,7 +81,7 @@ const data = {
       items: [
         {
           title: "AI 诊断报告",
-          url: "/ai-report",
+          url: "/insights",
           icon: ShieldCheck,
         },
         {
