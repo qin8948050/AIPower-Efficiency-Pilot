@@ -4,17 +4,22 @@ import "time"
 
 // InsightSummary AI 特征摘要（脱敏后供 LLM 使用）
 type InsightSummary struct {
-	PoolID           string       `json:"pool_id"`
-	TimeRange        string       `json:"time_range"` // e.g., "7d"
-	AvgUtilization   float64      `json:"avg_utilization"`
-	MaxUtilization   float64      `json:"max_utilization"`
-	CostTotal        float64      `json:"cost_total"`
-	WasteCost        float64      `json:"waste_cost"` // 低利用率导致的浪费
-	PodCount         int          `json:"pod_count"`
-	LowUtilPods      []LowUtilPod `json:"low_util_pods,omitempty"`
-	HighJitterPods   []JitterPod  `json:"high_jitter_pods,omitempty"`
-	HardwareFeatures string       `json:"hardware_features,omitempty"`
-	SlicingMode      string       `json:"slicing_mode"`
+	PoolID              string              `json:"pool_id"`
+	TimeRange           string              `json:"time_range"` // e.g., "7d"
+	AvgUtilization      float64             `json:"avg_utilization"`
+	MaxUtilization      float64             `json:"max_utilization"`
+	CostTotal           float64             `json:"cost_total"`
+	WasteCost           float64             `json:"waste_cost"` // 低利用率导致的浪费
+	PodCount            int                 `json:"pod_count"`
+	LowUtilPods         []LowUtilPod        `json:"low_util_pods,omitempty"`
+	HighJitterPods      []JitterPod         `json:"high_jitter_pods,omitempty"`
+	FeatureMismatchPods []FeatureMismatchPod `json:"feature_mismatch_pods,omitempty"`
+	HardwareFeatures    string              `json:"hardware_features,omitempty"`
+	SlicingMode         string              `json:"slicing_mode"`
+	// 分析类型标志（根据池子类型和条件判定）
+	IsDowngradeTarget  bool `json:"is_downgrade_target"`  // Full/MIG 池，利用率<30%持续3天
+	IsIsolationTarget  bool `json:"is_isolation_target"`  // MPS/TS 池，抖动>15%
+	IsFeatureMismatch bool `json:"is_feature_mismatch"`  // 高端特性(NVLink/FP8)利用率<10%
 }
 
 type LowUtilPod struct {
@@ -28,6 +33,15 @@ type JitterPod struct {
 	PodName   string  `json:"pod_name"`
 	Namespace string  `json:"namespace"`
 	JitterPct float64 `json:"jitter_pct"`
+}
+
+// FeatureMismatchPod 特性不匹配 Pod
+type FeatureMismatchPod struct {
+	PodName          string  `json:"pod_name"`
+	Namespace        string  `json:"namespace"`
+	RequiredFeatures string  `json:"required_features"` // Pod 声明需要的特性
+	AvgUtil          float64 `json:"avg_util"`
+	EstWasteCost     float64 `json:"est_waste_cost"`
 }
 
 // InsightReport AI 诊断报告

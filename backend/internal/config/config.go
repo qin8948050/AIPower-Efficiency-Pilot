@@ -39,9 +39,9 @@ type K8sConfig struct {
 }
 
 type LLMConfig struct {
-	Provider   string `mapstructure:"provider"`   // "gemini", "openai"
+	Provider   string `mapstructure:"provider"`   // "gemini", "openai", "minimax"
 	APIKey     string `mapstructure:"api_key"`
-	Model      string `mapstructure:"model"`       // "gemini-pro", "gpt-4"
+	Model      string `mapstructure:"model"`       // "gemini-pro", "gpt-4", "MiniMax-Text-01"
 	Endpoint   string `mapstructure:"endpoint"`    // 自定义端点
 	MaxTokens  int    `mapstructure:"max_tokens"`  // 最大 token 数
 	Temperature float64 `mapstructure:"temperature"` // 温度参数

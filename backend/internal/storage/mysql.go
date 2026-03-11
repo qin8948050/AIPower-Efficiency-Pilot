@@ -25,6 +25,9 @@ type LifeTrace struct {
 	// 业务归属标签（从 Pod Labels 提取）
 	TeamLabel    string `gorm:"column:team_label;type:varchar(128)"`
 	ProjectLabel string `gorm:"column:project_label;type:varchar(128)"`
+	// Pod 声明需要的硬件特性（从 Pod Annotations 提取）
+	// 如: "NVLink,RDMA,FP8"
+	RequiredFeatures string `gorm:"column:required_features;type:varchar(256)"`
 	// 聚合指标持久化字段（Phase 2 指标缝合后回填）
 	GPUUtilAvg    float64 `gorm:"column:gpu_util_avg;type:float;default:0"`
 	GPUUtilMax    float64 `gorm:"column:gpu_util_max;type:float;default:0"`

@@ -1,9 +1,12 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/qxw/aipower-efficiency-pilot/internal/config"
@@ -28,41 +31,82 @@ func NewAnalyzer(mysqlCli *storage.MySQLClient, cfg *config.LLMConfig) *Analyzer
 
 // GenerateReport 生成诊断报告
 func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, error) {
-	// 1. 生成数据摘要
-	var summary *InsightSummary
-	var err error
-
-	if poolID != "" {
-		summary, err = a.summarizer.GeneratePoolSummary(poolID, days)
-	} else {
-		// 全量分析 - 取第一个有数据的资源池
-		pools, err := a.summarizer.GenerateAllPoolsSummary(days)
-		if err != nil || len(pools) == 0 {
-			return nil, fmt.Errorf("no data available")
-		}
-		// 选择浪费成本最高的资源池
-		summary = &pools[0]
-		for _, s := range pools {
-			if s.WasteCost > summary.WasteCost {
-				summary = &s
-			}
-		}
-	}
-
+	// 核心算法：分析任务场景与资源池的匹配关系
+	mismatches, err := a.summarizer.AnalyzeTaskPoolMismatch(days)
+	fmt.Printf("mismatches:%v\n",mismatches)
 	if err != nil {
 		return nil, err
 	}
 
+	if len(mismatches) == 0 {
+		return &InsightReport{
+			ID:          "0",
+			GeneratedAt: time.Now(),
+			PoolID:     poolID,
+			ReportType: "general",
+			Summary:    "所有任务与资源池匹配良好，未发现需要优化的场景。",
+			RootCause:  "任务场景与资源池匹配合理，利用率正常。",
+			Actions:    "[]",
+			EstSavings: 0,
+			Status:     "pending",
+		}, nil
+	}
+
+	// 选择最严重的问题（按预估节省排序）
+	selectedMismatch := mismatches[0]
+	for _, m := range mismatches {
+		if m.EstSavings > selectedMismatch.EstSavings {
+			selectedMismatch = m
+		}
+	}
+
+	// 构建 InsightSummary 供 LLM 使用
+	summary := &InsightSummary{
+		PoolID:           selectedMismatch.CurrentPool.PoolID,
+		TimeRange:        fmt.Sprintf("%dd", days),
+		HardwareFeatures:  selectedMismatch.CurrentPool.HardwareFeatures,
+		SlicingMode:      selectedMismatch.CurrentPool.SlicingMode,
+		AvgUtilization:   selectedMismatch.Task.AvgUtil,
+		MaxUtilization:   selectedMismatch.Task.MaxUtil,
+		CostTotal:        selectedMismatch.Task.Cost,
+		WasteCost:        selectedMismatch.EstSavings,
+	}
+
+	// 添加对应的 Pod 列表
+	switch selectedMismatch.ReportType {
+	case "downgrade":
+		summary.LowUtilPods = []LowUtilPod{{
+			PodName:      selectedMismatch.Task.PodName,
+			Namespace:    selectedMismatch.Task.Namespace,
+			AvgUtil:      selectedMismatch.Task.AvgUtil,
+			EstWasteCost: selectedMismatch.EstSavings,
+		}}
+	case "isolation":
+		summary.HighJitterPods = []JitterPod{{
+			PodName:   selectedMismatch.Task.PodName,
+			Namespace: selectedMismatch.Task.Namespace,
+			JitterPct: selectedMismatch.Task.Jitter,
+		}}
+	case "feature_mismatch":
+		summary.FeatureMismatchPods = []FeatureMismatchPod{{
+			PodName:          selectedMismatch.Task.PodName,
+			Namespace:        selectedMismatch.Task.Namespace,
+			RequiredFeatures: selectedMismatch.Task.RequiredFeatures,
+			AvgUtil:          selectedMismatch.Task.AvgUtil,
+			EstWasteCost:     selectedMismatch.EstSavings,
+		}}
+	}
+
 	// 2. 确定报告类型
-	reportType := determineReportType(summary)
+	reportType := selectedMismatch.ReportType
 
 	// 3. 调用 LLM 生成诊断建议
 	llmResponse, err := a.callLLM(summary)
 	if err != nil {
 		log.Printf("[Analyzer] LLM call failed, using fallback: %v", err)
-		llmResponse = a.fallbackAnalysis(summary)
+		llmResponse = a.fallbackAnalysisForMismatch(&selectedMismatch)
 	}
-
+	fmt.Print(llmResponse)
 	// 4. 保存报告
 	report := &storage.InsightReport{
 		GeneratedAt: time.Now(),
@@ -93,20 +137,49 @@ func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, erro
 	}, nil
 }
 
-// determineReportType 确定报告类型
+// selectPriorityPool 选择优先处理的资源池
+// 优先级: downgrade > isolation > feature_mismatch
+func selectPriorityPool(pools []InsightSummary) *InsightSummary {
+	for i := range pools {
+		if pools[i].IsDowngradeTarget {
+			return &pools[i]
+		}
+	}
+	for i := range pools {
+		if pools[i].IsIsolationTarget {
+			return &pools[i]
+		}
+	}
+	for i := range pools {
+		if pools[i].IsFeatureMismatch {
+			return &pools[i]
+		}
+	}
+	// 默认返回第一个
+	if len(pools) > 0 {
+		return &pools[0]
+	}
+	return nil
+}
+
+// determineReportType 确定报告类型（根据三种核心算法）
 func determineReportType(summary *InsightSummary) string {
-	if len(summary.LowUtilPods) > 0 && summary.AvgUtilization < 30 {
+	// 优先级: downgrade > isolation > feature_mismatch
+	if summary.IsDowngradeTarget {
 		return "downgrade"
 	}
-	if len(summary.HighJitterPods) > 0 {
+	if summary.IsIsolationTarget {
 		return "isolation"
+	}
+	if summary.IsFeatureMismatch {
+		return "feature_mismatch"
 	}
 	return "general"
 }
 
 // LLMResponse LLM 响应结构
 type LLMResponse struct {
-	Summary       string
+	Summary      string
 	RootCause    string
 	ActionsJSON  string
 }
@@ -126,6 +199,8 @@ func (a *Analyzer) callLLM(summary *InsightSummary) (*LLMResponse, error) {
 		return a.callGemini(prompt)
 	case "openai":
 		return a.callOpenAI(prompt)
+	case "minimax":
+		return a.callMiniMax(prompt)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", a.cfg.Provider)
 	}
@@ -145,82 +220,331 @@ func (a *Analyzer) callOpenAI(prompt string) (*LLMResponse, error) {
 	return nil, fmt.Errorf("openai not implemented")
 }
 
+// callMiniMax 调用 MiniMax API
+func (a *Analyzer) callMiniMax(prompt string) (*LLMResponse, error) {
+	if a.cfg.APIKey == "" {
+		return nil, fmt.Errorf("minimax api key is empty")
+	}
+
+	// MiniMax API 配置
+	model := a.cfg.Model
+	if model == "" {
+		model = "MiniMax-Text-01" // 默认使用最新模型
+	}
+
+	// 构建请求
+	endpoint := a.cfg.Endpoint
+	if endpoint == "" {
+		endpoint = "https://api.minimax.chat/v1/text/chatcompletion_v2"
+	}
+
+	// 构建请求体
+	type Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	type Request struct {
+		Model       string    `json:"model"`
+		Messages    []Message `json:"messages"`
+		Temperature float64   `json:"temperature,omitempty"`
+		MaxTokens   int      `json:"max_tokens,omitempty"`
+	}
+
+	reqBody := Request{
+		Model: model,
+		Messages: []Message{
+			{Role: "user", Content: prompt},
+		},
+		Temperature: a.cfg.Temperature,
+		MaxTokens:   a.cfg.MaxTokens,
+	}
+
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	// 发送请求
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call minimax api: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 解析响应
+	type Choice struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+
+	type Response struct {
+		Choices []Choice `json:"choices"`
+	}
+
+	var respBody Response
+	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %v", err)
+	}
+
+	if len(respBody.Choices) == 0 {
+		return nil, fmt.Errorf("no response from minimax")
+	}
+
+	// 解析 JSON 响应
+	content := respBody.Choices[0].Message.Content
+	return parseLLMResponse(content)
+}
+
+// parseLLMResponse 解析 LLM 响应 JSON
+func parseLLMResponse(content string) (*LLMResponse, error) {
+	// 尝试解析 JSON
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		// 如果不是 JSON，直接返回
+		return &LLMResponse{
+			Summary:    content,
+			RootCause:  "LLM 返回非 JSON 格式",
+			ActionsJSON: "[]",
+		}, nil
+	}
+
+	response := &LLMResponse{}
+
+	if v, ok := result["summary"].(string); ok {
+		response.Summary = v
+	}
+	if v, ok := result["root_cause"].(string); ok {
+		response.RootCause = v
+	}
+	if v, ok := result["actions"]; ok {
+		actionsBytes, _ := json.Marshal(v)
+		response.ActionsJSON = string(actionsBytes)
+	}
+
+	return response, nil
+}
+
 // fallbackAnalysis 回退分析（当 LLM 不可用时）
-func (a *Analyzer) fallbackAnalysis(summary *InsightSummary) *LLMResponse {
+// 根据报告类型生成对应的迁移建议
+func (a *Analyzer) fallbackAnalysis(summary *InsightSummary, reportType string) *LLMResponse {
 	var actions []InsightAction
 
-	// 生成降级建议
-	if len(summary.LowUtilPods) > 0 {
-		for _, pod := range summary.LowUtilPods {
-			action := InsightAction{
-				Type:      "migrate",
-				PodName:   pod.PodName,
-				Namespace: pod.Namespace,
-				FromPool:  summary.PoolID,
-				ToPool:    inferTargetPool(summary.PoolID),
-			}
-			actions = append(actions, action)
-		}
+	switch reportType {
+	case "downgrade":
+		// 降级迁移: Full/MIG 池 → MPS/TS 池
+		actions = generateDowngradeActions(summary)
+	case "isolation":
+		// 稳定性升级: MPS/TS 池 → MIG 池
+		actions = generateIsolationActions(summary)
+	case "feature_mismatch":
+		// 特性纠偏: 高端池 → 通用池
+		actions = generateFeatureMismatchActions(summary)
+	default:
+		// general: 无特殊建议
 	}
 
 	actionsJSON, _ := json.Marshal(actions)
 
-	summaryText := fmt.Sprintf("资源池 %s 在过去 %s 内平均利用率为 %.1f%%，总成本 $%.2f，预计浪费成本 $%.2f。",
-		summary.PoolID, summary.TimeRange, summary.AvgUtilization, summary.CostTotal, summary.WasteCost)
-
-	rootCause := "资源池中存在多个低利用率任务，占用了高端资源池的配额，导致资源浪费。"
+	summaryText := buildSummaryText(summary, reportType)
+	rootCause := buildRootCause(summary, reportType)
 
 	return &LLMResponse{
-		Summary:      summaryText,
-		RootCause:    rootCause,
-		ActionsJSON:  string(actionsJSON),
+		Summary:     summaryText,
+		RootCause:   rootCause,
+		ActionsJSON: string(actionsJSON),
 	}
 }
 
-// inferTargetPool 推断目标资源池
-func inferTargetPool(currentPool string) string {
-	// 根据当前池子推断更便宜的目标池
-	if contains(currentPool, "Full") {
-		return getPoolByMode(currentPool, "MPS")
+// fallbackAnalysisForMismatch 回退分析（基于 MismatchResult）
+func (a *Analyzer) fallbackAnalysisForMismatch(mismatch *MismatchResult) *LLMResponse {
+	action := InsightAction{
+		Type:      "migrate",
+		PodName:   mismatch.Task.PodName,
+		Namespace: mismatch.Task.Namespace,
+		FromPool:  mismatch.CurrentPool.PoolID,
+		ToPool:    mismatch.SuggestedPool,
 	}
-	if contains(currentPool, "MIG") {
-		return getPoolByMode(currentPool, "TS")
+	actionsJSON, _ := json.Marshal([]InsightAction{action})
+
+	return &LLMResponse{
+		Summary:     mismatch.Reason,
+		RootCause:   mismatch.Reason,
+		ActionsJSON: string(actionsJSON),
+	}
+}
+
+// generateDowngradeActions 生成降级迁移建议
+// Full/MIG 池利用率 < 30% → 迁移至 MPS/TS 池
+func generateDowngradeActions(summary *InsightSummary) []InsightAction {
+	var actions []InsightAction
+
+	// 找出低利用率 Pod
+	targetPods := summary.LowUtilPods
+	if len(targetPods) == 0 {
+		// 如果没有低利用率 Pod，但被标记为 downgrade，说明整体利用率低
+		targetPods = []LowUtilPod{{
+			AvgUtil: summary.AvgUtilization,
+		}}
+	}
+
+	for _, pod := range targetPods {
+		action := InsightAction{
+			Type:      "migrate",
+			PodName:   pod.PodName,
+			Namespace: pod.Namespace,
+			FromPool:  summary.PoolID,
+			ToPool:    inferTargetPoolForDowngrade(summary.PoolID),
+		}
+		actions = append(actions, action)
+	}
+
+	return actions
+}
+
+// generateIsolationActions 生成稳定性升级建议
+// MPS/TS 池抖动 > 15% → 迁移至 MIG 硬隔离池
+func generateIsolationActions(summary *InsightSummary) []InsightAction {
+	var actions []InsightAction
+
+	for _, pod := range summary.HighJitterPods {
+		action := InsightAction{
+			Type:      "migrate",
+			PodName:   pod.PodName,
+			Namespace: pod.Namespace,
+			FromPool:  summary.PoolID,
+			ToPool:    inferTargetPoolForIsolation(summary.PoolID),
+		}
+		actions = append(actions, action)
+	}
+
+	return actions
+}
+
+// generateFeatureMismatchActions 生成特性纠偏建议
+// 高端特性池利用率 < 10% → 回退至通用池
+func generateFeatureMismatchActions(summary *InsightSummary) []InsightAction {
+	var actions []InsightAction
+
+	for _, pod := range summary.FeatureMismatchPods {
+		action := InsightAction{
+			Type:      "pool_change",
+			PodName:   pod.PodName,
+			Namespace: pod.Namespace,
+			FromPool:  summary.PoolID,
+			ToPool:    inferTargetPoolForFeatureMismatch(summary.PoolID),
+		}
+		actions = append(actions, action)
+	}
+
+	return actions
+}
+
+// inferTargetPoolForDowngrade Full/MIG → MPS/TS
+func inferTargetPoolForDowngrade(currentPool string) string {
+	// 根据当前池子推断更便宜的目标池
+	if strings.Contains(currentPool, "Train") {
+		// 训练池: Full → MPS
+		return strings.Replace(currentPool, "Full", "MPS", 1)
+	}
+	if strings.Contains(currentPool, "Infer") {
+		// 推理池: MIG → TS
+		return strings.Replace(currentPool, "MIG", "TS", 1)
+	}
+	// 尝试通用替换
+	if strings.Contains(currentPool, "Full") {
+		return strings.Replace(currentPool, "Full", "MPS", 1)
+	}
+	if strings.Contains(currentPool, "MIG") {
+		return strings.Replace(currentPool, "MIG", "TS", 1)
 	}
 	return currentPool
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
-}
+// inferTargetPoolForIsolation MPS/TS → MIG
+func inferTargetPoolForIsolation(currentPool string) string {
+	// 寻找对应的 MIG 池
+	pools := []string{
+		"Infer-A100-MIG-Pool",
+		"Infer-L4-MPS-Pool",  // L4 没有 MIG，尝试 L4
+		"Dev-T4-TS-Pool",     // T4 没有 MIG
+	}
 
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	for _, pool := range pools {
+		// 尝试匹配相似名称的 MIG 池
+		if strings.Contains(currentPool, strings.Split(pool, "-")[1]) {
+			// 如果是 A100 系列的 MPS，返回 MIG 池
+			if strings.Contains(currentPool, "A100") && strings.Contains(pool, "A100") {
+				return "Infer-A100-MIG-Pool"
+			}
 		}
 	}
-	return false
+
+	// 默认返回 MIG 池
+	return "Infer-A100-MIG-Pool"
 }
 
-func getPoolByMode(pool, mode string) string {
-	// 简单替换模式标识
-	for _, m := range []string{"Full", "MIG", "MPS", "TS"} {
-		if contains(pool, m) {
-			return replace(pool, m, mode)
-		}
+// inferTargetPoolForFeatureMismatch 高端池 → 通用池
+func inferTargetPoolForFeatureMismatch(currentPool string) string {
+	// 降级到通用/低成本池
+	if strings.Contains(currentPool, "H800") {
+		return "Train-A100-Full-Pool"
 	}
-	return pool
+	if strings.Contains(currentPool, "A100") && strings.Contains(currentPool, "Full") {
+		return "Infer-A100-MIG-Pool"
+	}
+	return "Dev-T4-TS-Pool"
 }
 
-func replace(s, old, new string) string {
-	result := s
-	for i := 0; i <= len(s)-len(old); i++ {
-		if s[i:i+len(old)] == old {
-			result = s[:i] + new + s[i+len(old):]
-			break
-		}
+// buildSummaryText 构建摘要文本
+func buildSummaryText(summary *InsightSummary, reportType string) string {
+	utilStr := fmt.Sprintf("%.1f%%", summary.AvgUtilization)
+	costStr := fmt.Sprintf("%.2f", summary.CostTotal)
+	wasteStr := fmt.Sprintf("%.2f", summary.WasteCost)
+
+	switch reportType {
+	case "downgrade":
+		return fmt.Sprintf("资源池 %s 在过去 %s 内平均利用率为 %s，存在资源浪费问题。"+
+			"检测到 %d 个低利用率 Pod (< 30%%)，建议迁移至低成本池。"+
+			"总成本 $%s，预计浪费 $%s。",
+			summary.PoolID, summary.TimeRange, utilStr, len(summary.LowUtilPods), costStr, wasteStr)
+	case "isolation":
+		return fmt.Sprintf("资源池 %s 在过去 %s 内存在算力抖动问题。"+
+			"检测到 %d 个高抖动 Pod (Jitter > 15%%)，可能受邻居干扰。"+
+			"建议迁移至 MIG 硬隔离池以确保稳定性。",
+			summary.PoolID, summary.TimeRange, len(summary.HighJitterPods))
+	case "feature_mismatch":
+		return fmt.Sprintf("资源池 %s 配置了高端特性 (%s)，但平均利用率仅为 %s。"+
+			"检测到 %d 个未充分利用高端特性的 Pod (< 10%%)，建议回退至通用池以节省成本。",
+			summary.PoolID, summary.HardwareFeatures, utilStr, len(summary.FeatureMismatchPods))
+	default:
+		return fmt.Sprintf("资源池 %s 在过去 %s 内运行良好，平均利用率 %s，无需特殊处理。",
+			summary.PoolID, summary.TimeRange, utilStr)
 	}
-	return result
+}
+
+// buildRootCause 构建根因分析
+func buildRootCause(summary *InsightSummary, reportType string) string {
+	switch reportType {
+	case "downgrade":
+		return "该池子中存在多个低利用率任务，占用了高端 GPU 资源池的配额，但实际算力消耗远低于预留资源。建议将这些任务迁移至 MPS/TS 共享池以释放高端资源。"
+	case "isolation":
+		return "MPS/TS 模式下多个任务共享同一 GPU，导致算力分配不稳定。部分延迟敏感型任务受邻居干扰严重，出现性能抖动。建议迁移至 MIG 硬隔离池。"
+	case "feature_mismatch":
+		return "该池子配置了高端硬件特性(NVLink/FP8/RDMA)，但任务的算力需求不需要这些特性，造成资源浪费。建议回退至通用资源池。"
+	default:
+		return "资源池与任务场景匹配良好，利用率正常。"
+	}
 }
 
 // calculateEstSavings 计算预期节省
@@ -235,21 +559,80 @@ func calculateEstSavings(summary *InsightSummary) float64 {
 }
 
 // buildPrompt 构建诊断 Prompt
+// 核心：分析"任务场景"与"资源池"的匹配关系
 func buildPrompt(summary *InsightSummary) string {
-	prompt := `你是一个 AI 算力效能治理专家。请分析以下资源池数据，生成优化建议。
+	reportType := determineReportType(summary)
 
-## 资源池数据
-` + summary.ToMarkdown() + `
+	prompt := `你是一个 AI 算力效能治理专家。你的核心任务是识别"任务场景"与"资源池"的不匹配，并生成优化建议。
 
-## 分析要求
-1. 分析资源利用效率
-2. 识别资源浪费的根本原因
-3. 提出具体的优化动作（迁移、降级等）
-4. 估算年度节省成本
+## 任务与资源池匹配分析
+`
+
+	// 根据报告类型添加对应的任务信息
+	switch reportType {
+	case "downgrade":
+		prompt += `### 降级迁移分析
+当前任务在 Full/MIG 高端资源池中利用率较低（<30%），资源浪费严重。
+- 资源池类型: ` + summary.SlicingMode + `
+- 资源池硬件特性: ` + summary.HardwareFeatures + `
+- 平均利用率: ` + fmt.Sprintf("%.1f%%", summary.AvgUtilization) + `
+`
+		if len(summary.LowUtilPods) > 0 {
+			prompt += `### 低利用率任务列表
+| Pod Name | Namespace | 利用率 | 预估浪费成本 |
+|----------|-----------|--------|------------|
+`
+			for _, p := range summary.LowUtilPods {
+				prompt += fmt.Sprintf("| %s | %s | %.1f%% | $%.2f |\n", p.PodName, p.Namespace, p.AvgUtil, p.EstWasteCost)
+			}
+		}
+		prompt += `
+请分析这些任务是否真的需要高端 Full/MIG 资源，建议迁移至 MPS/TS 共享池以节省成本。`
+
+	case "isolation":
+		prompt += `### 稳定性升级分析
+当前任务在 MPS/TS 共享池中受到邻居干扰，算力抖动较大（>15%）。
+- 资源池类型: ` + summary.SlicingMode + `
+`
+		if len(summary.HighJitterPods) > 0 {
+			prompt += `### 高抖动任务列表
+| Pod Name | Namespace | 抖动率 |
+|----------|-----------|--------|
+`
+			for _, p := range summary.HighJitterPods {
+				prompt += fmt.Sprintf("| %s | %s | %.1f%% |\n", p.PodName, p.Namespace, p.JitterPct)
+			}
+		}
+		prompt += `
+请分析这些任务是否需要硬隔离环境，建议迁移至 MIG 硬隔离池以保证稳定性。`
+
+	case "feature_mismatch":
+		prompt += `### 特性纠偏分析
+当前任务声明需要特定硬件特性，但与资源池特性不匹配。
+- 资源池硬件特性: ` + summary.HardwareFeatures + `
+`
+		if len(summary.FeatureMismatchPods) > 0 {
+			prompt += `### 特性不匹配任务列表
+| Pod Name | Namespace | 声明需要特性 | 资源池特性 | 利用率 |
+|----------|-----------|-------------|----------|--------|
+`
+			for _, p := range summary.FeatureMismatchPods {
+				prompt += fmt.Sprintf("| %s | %s | %s | %s | %.1f%% |\n",
+					p.PodName, p.Namespace, p.RequiredFeatures, summary.HardwareFeatures, p.AvgUtil)
+			}
+		}
+		prompt += `
+请分析这些任务是否真正需要声明的硬件特性（忽略大小写和顺序差异，如 NVLink vs nvlink），如果不需要建议回退至通用池。`
+
+	default:
+		prompt += `资源匹配良好，无需特殊处理。`
+	}
+
+	prompt += `
 
 ## 输出格式
 请以 JSON 格式输出，包含以下字段：
-- summary: 总结描述
+- summary: 总结描述（简洁明了）
 - root_cause: 根本原因分析
 - actions: 具体优化动作数组，每项包含 type, pod_name, namespace, from_pool, to_pool
 

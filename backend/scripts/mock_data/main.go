@@ -86,13 +86,28 @@ func main() {
 		dateStr := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
 		for _, pool := range pools {
 			for _, ns := range namespaces {
+				avgUtil := 10 + r.Float64()*80
+				// 针对性生成测试数据触发三种算法
+				if pool == "Train-A100-Full-Pool" && ns == "ai-platform" {
+					// 算法1: 降级 - Full池利用率<30%持续3天 (最近3天都是低利用率)
+					if i <= 3 {
+						avgUtil = 15 + r.Float64()*10 // 15-25%
+					}
+				} else if pool == "Train-H800-Full-Pool" && ns == "default" {
+					// 算法3: 特性纠偏 - NVLink池利用率<10%
+					avgUtil = 3 + r.Float64()*5 // 3-8%
+				} else if pool == "Dev-T4-TS-Pool" {
+					// 其他池随机
+					avgUtil = 10 + r.Float64()*80
+				}
+
 				snapshot := &storage.DailyBillingSnapshot{
 					SnapshotDate:    dateStr,
 					PoolID:          pool,
 					Namespace:       ns,
 					TeamLabel:       teams[r.Intn(len(teams))],
 					TotalCost:       200 + r.Float64()*1000,
-					AvgUtilP95:      10 + r.Float64()*80,
+					AvgUtilP95:      avgUtil,
 					MaxMemGiB:       4 + r.Float64()*28,
 					PodSessionCount: 5 + r.Intn(20),
 				}
@@ -108,10 +123,28 @@ func main() {
 		node := nodes[r.Intn(len(nodes))]
 		poolID := pools[r.Intn(len(pools))]
 		team := teams[r.Intn(len(teams))]
-		
+
 		startTime := time.Now().Add(-time.Duration(r.Intn(48)) * time.Hour)
 		endTime := startTime.Add(time.Duration(30+r.Intn(300)) * time.Minute)
-		
+
+		// 针对性生成测试数据触发三种算法
+		avgUtil := 10 + r.Float64()*80
+		maxUtil := avgUtil + r.Float64()*20
+
+		if poolID == "Train-A100-Full-Pool" {
+			// 算法1: 降级 - Full池利用率<30%
+			avgUtil = 15 + r.Float64()*10 // 15-25%
+			maxUtil = avgUtil + 10
+		} else if poolID == "Dev-T4-TS-Pool" {
+			// 算法2: 隔离 - TS池高抖动 (>15%)
+			avgUtil = 40 + r.Float64()*30
+			maxUtil = avgUtil + 20 + r.Float64()*10 // 抖动 > 15%
+		} else if poolID == "Train-H800-Full-Pool" {
+			// 算法3: 特性纠偏 - NVLink池利用率<10%
+			avgUtil = 3 + r.Float64()*5 // 3-8%
+			maxUtil = avgUtil + 5
+		}
+
 		trace := &storage.LifeTrace{
 			PodUID:        fmt.Sprintf("hist-uid-%d", i),
 			Namespace:     ns,
@@ -123,8 +156,8 @@ func main() {
 			EndTime:       &endTime,
 			Status:        "Settled",
 			TeamLabel:     team,
-			GPUUtilAvg:    10 + r.Float64()*80,
-			GPUUtilMax:    90 + r.Float64()*10,
+			GPUUtilAvg:    avgUtil,
+			GPUUtilMax:    maxUtil,
 			MemUsedMax:    uint64(2048 + r.Intn(30000)),
 			PowerUsageAvg: 150 + r.Float64()*100,
 			CostAmount:    5 + r.Float64()*50,
