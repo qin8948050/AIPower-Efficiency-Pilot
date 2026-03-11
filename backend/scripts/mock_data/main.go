@@ -121,6 +121,7 @@ func main() {
 			SlicingMode:   string(modes[r.Intn(len(modes))]),
 			StartTime:     startTime,
 			EndTime:       &endTime,
+			Status:        "Settled",
 			TeamLabel:     team,
 			GPUUtilAvg:    10 + r.Float64()*80,
 			GPUUtilMax:    90 + r.Float64()*10,

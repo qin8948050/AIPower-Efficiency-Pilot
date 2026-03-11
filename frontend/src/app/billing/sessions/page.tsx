@@ -79,7 +79,7 @@ export default function SessionsPage() {
     const matchesNamespace = filters.namespace === "all" || s.Namespace === filters.namespace;
     const matchesPool = filters.poolID === "all" || s.PoolID === filters.poolID;
     const matchesMode = filters.mode === "all" || s.SlicingMode === filters.mode;
-    const matchesStatus = filters.status === "all" || (filters.status === "completed" ? !!s.EndTime : !s.EndTime);
+    const matchesStatus = filters.status === "all" || s.Status === filters.status || (filters.status === "completed" && s.Status === "Settled") || (filters.status === "running" && s.Status === "Running");
     return matchesSearch && matchesNamespace && matchesPool && matchesMode && matchesStatus;
   });
 
@@ -88,7 +88,7 @@ export default function SessionsPage() {
   const modes = Array.from(new Set(sessions.map(s => s.SlicingMode))).sort();
   const hasActiveFilters = filters.namespace !== "all" || filters.poolID !== "all" || filters.mode !== "all" || filters.status !== "all";
 
-  const lowEfficiencyCount = filtered.filter(s => s.GPUUtilAvg < 30 && s.EndTime).length;
+  const lowEfficiencyCount = filtered.filter(s => s.GPUUtilAvg < 30 && s.Status === "Settled").length;
   const avgEfficiency = filtered.length > 0 ? filtered.reduce((acc, curr) => acc + curr.GPUUtilAvg, 0) / filtered.length : 0;
 
   return (
@@ -224,9 +224,10 @@ export default function SessionsPage() {
                   <Select value={filters.status} onValueChange={(val: string) => setFilters({ ...filters, status: val })}>
                     <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">不限结算状态</SelectItem>
-                      <SelectItem value="completed">已结算任务</SelectItem>
-                      <SelectItem value="running">运行中任务</SelectItem>
+                      <SelectItem value="all">不限状态</SelectItem>
+                      <SelectItem value="Settled">已结算</SelectItem>
+                      <SelectItem value="Auditing">审计中</SelectItem>
+                      <SelectItem value="Running">运行中</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -311,7 +312,7 @@ export default function SessionsPage() {
                             <div className={`${s.GPUUtilAvg < 30 ? "bg-rose-400 shadow-sm shadow-rose-200" : "bg-emerald-400 shadow-sm shadow-emerald-200"} h-full transition-all duration-500`} style={{ width: `${s.GPUUtilAvg}%` }} />
                             <div className="bg-slate-300 h-full opacity-20" style={{ width: `${s.GPUUtilMax - s.GPUUtilAvg}%` }} />
                           </div>
-                          {s.GPUUtilAvg < 30 && s.EndTime && (
+                          {s.GPUUtilAvg < 30 && s.Status === "Settled" && (
                             <div className="flex items-center text-[9px] text-rose-500 font-black uppercase tracking-tighter gap-1">
                               <AlertCircle size={10} strokeWidth={3} /> Low Performance
                             </div>
@@ -334,13 +335,15 @@ export default function SessionsPage() {
                       </TableCell>
                       <TableCell className="text-right pr-6">
                         <Badge
-                          variant={s.EndTime ? "outline" : "default"}
-                          className={s.EndTime
+                          variant={s.Status === "Settled" ? "outline" : "default"}
+                          className={s.Status === "Settled"
                             ? "border-emerald-200 text-emerald-700 bg-emerald-50 text-[10px] font-black px-2.5 py-1 uppercase"
+                            : s.Status === "Auditing"
+                            ? "bg-amber-500 text-white text-[10px] font-black px-2.5 py-1 uppercase"
                             : "bg-indigo-600 text-white animate-pulse text-[10px] font-black px-2.5 py-1 uppercase shadow-lg shadow-indigo-200"
                           }
                         >
-                          {s.EndTime ? "Settled" : "Auditing"}
+                          {s.Status === "Settled" ? "已结算" : s.Status === "Auditing" ? "审计中" : "运行中"}
                         </Badge>
                       </TableCell>
                     </TableRow>

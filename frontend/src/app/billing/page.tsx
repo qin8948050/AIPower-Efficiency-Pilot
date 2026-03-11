@@ -241,8 +241,8 @@ export default function BillingPage() {
                   <TableCell>{new Date(tx.StartTime).toLocaleString()}</TableCell>
                   <TableCell>¥{tx.CostAmount.toFixed(4)}</TableCell>
                   <TableCell className="text-right">
-                    <Badge variant={tx.EndTime ? "outline" : "secondary"}>
-                      {tx.EndTime ? "已结算" : "运行中"}
+                    <Badge variant={tx.Status === "Settled" ? "outline" : "secondary"}>
+                      {tx.Status === "Settled" ? "已结算" : tx.Status === "Auditing" ? "审计中" : "运行中"}
                     </Badge>
                   </TableCell>
                 </TableRow>

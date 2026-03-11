@@ -20,6 +20,8 @@ type LifeTrace struct {
 	SlicingMode string     `gorm:"column:slicing_mode;type:varchar(32);not null"`
 	StartTime   time.Time  `gorm:"column:start_time;type:datetime;not null;index:idx_time"`
 	EndTime     *time.Time `gorm:"column:end_time;type:datetime"`
+	// 状态: Running, Auditing, Settled
+	Status      string     `gorm:"column:status;type:varchar(32);default:'Running'"`
 	// 业务归属标签（从 Pod Labels 提取）
 	TeamLabel    string `gorm:"column:team_label;type:varchar(128)"`
 	ProjectLabel string `gorm:"column:project_label;type:varchar(128)"`
@@ -171,6 +173,7 @@ func (m *MySQLClient) UpdateLifeTraceMetrics(id uint, avgUtil, maxUtil float64, 
 			"mem_used_max":    maxMem,
 			"power_usage_avg": avgPower,
 			"cost_amount":     cost,
+			"status":          "Settled",
 		}).Error
 }
 
@@ -200,6 +203,7 @@ func (m *MySQLClient) SaveLifeTrace(trace *types.PodTrace) error {
 		PoolID:       trace.PoolID,
 		SlicingMode:  string(trace.SlicingMode),
 		StartTime:    trace.StartTime,
+		Status:       "Running",
 		TeamLabel:    trace.TeamLabel,
 		ProjectLabel: trace.ProjectLabel,
 	}
@@ -222,7 +226,10 @@ func (m *MySQLClient) CloseLifeTrace(namespace, podName string) error {
 		Where("namespace = ? AND pod_name = ? AND end_time IS NULL", namespace, podName).
 		Order("start_time DESC").
 		Limit(1).
-		Update("end_time", &now).Error
+		Updates(map[string]interface{}{
+			"end_time": &now,
+			"status":   "Auditing",
+		}).Error
 }
 
 // GetBillingSessions 查询指定日期的账单记录 (已结束的 Pod)

@@ -20,6 +20,7 @@ export interface LifeTrace {
   SlicingMode: string;
   StartTime: string;
   EndTime: string | null;
+  Status: string; // Running, Auditing, Settled
   TeamLabel: string;
   ProjectLabel: string;
   GPUUtilAvg: number;
