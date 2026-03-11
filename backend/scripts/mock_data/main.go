@@ -35,6 +35,8 @@ func main() {
 	// 手动清理其他表 (演示环境)
 	mysqlClient.RawExec("TRUNCATE TABLE pool_pricing")
 	mysqlClient.RawExec("TRUNCATE TABLE daily_billing_snapshot")
+	mysqlClient.RawExec("TRUNCATE TABLE resource_pool")
+	mysqlClient.RawExec("TRUNCATE TABLE insight_reports")
 	redisClient.FlushDB()
 
 	// 2.6 注入定价配置 (Phase 2 核心)
@@ -161,6 +163,72 @@ func main() {
 		redisClient.SavePodTrace(trace)
 	}
 
-	fmt.Println("\n二阶段 Mock 数据注入完成！")
+	// 8. 生成 AI 诊断报告 (Phase 3)
+	fmt.Println("生成 AI 诊断报告...")
+	reports := []struct {
+		PoolID     string
+		ReportType string
+		Summary    string
+		RootCause  string
+		Actions    string
+		EstSavings float64
+		Status     string
+	}{
+		{
+			PoolID:     "Train-A100-Full-Pool",
+			ReportType: "downgrade",
+			Summary:    "资源池 Train-A100-Full-Pool 在过去7天内平均利用率仅为22.5%，存在严重的资源浪费。",
+			RootCause:  "该池子中存在多个低利用率训练任务(利用率15-30%)，占用了高端A100 GPU资源，建议迁移至MPS或TS池。",
+			Actions:    `[{"type":"migrate","pod_name":"offline-job-001","namespace":"ai-platform","from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool"},{"type":"migrate","pod_name":"offline-job-005","namespace":"data-science","from_pool":"Train-A100-Full-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
+			EstSavings: 12500.0,
+			Status:     "pending",
+		},
+		{
+			PoolID:     "Infer-A100-MIG-Pool",
+			ReportType: "general",
+			Summary:    "资源池 Infer-A100-MIG-Pool 利用率良好，平均65.5%，运行稳定。",
+			RootCause:  "推理任务资源利用充分，MIG硬隔离效果良好，无需特殊处理。",
+			Actions:    "[]",
+			EstSavings: 0,
+			Status:     "pending",
+		},
+		{
+			PoolID:     "Dev-T4-TS-Pool",
+			ReportType: "isolation",
+			Summary:    "资源池 Dev-T4-TS-Pool 中部分任务存在算力抖动，可能受邻居干扰。",
+			RootCause:  "Time-Slicing模式下资源共享导致部分任务性能波动，建议对高优先级任务启用MPS隔离。",
+			Actions:    `[{"type":"pool_change","pod_name":"active-task-003","namespace":"default","from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
+			EstSavings: 2800.0,
+			Status:     "approved",
+		},
+		{
+			PoolID:     "Train-H800-Full-Pool",
+			ReportType: "downgrade",
+			Summary:    "上一周期的降级建议已执行，资源利用率提升至45%。",
+			RootCause:  "通过将低利用率任务迁移至低成本池，释放了高端GPU资源。",
+			Actions:    "[]",
+			EstSavings: 8500.0,
+			Status:     "approved",
+		},
+	}
+
+	reportTime := time.Now().AddDate(0, 0, -1)
+	for i, r := range reports {
+		generatedAt := reportTime.Add(-time.Duration(i*12) * time.Hour)
+		report := &storage.InsightReport{
+			GeneratedAt: generatedAt,
+			PoolID:      r.PoolID,
+			ReportType:  r.ReportType,
+			Summary:     r.Summary,
+			RootCause:   r.RootCause,
+			Actions:     r.Actions,
+			EstSavings:  r.EstSavings,
+			Status:      r.Status,
+		}
+		mysqlClient.SaveInsightReport(report)
+	}
+	fmt.Println("Created insight reports")
+
+	fmt.Println("\n全量 Mock 数据注入完成 (Phase 1 + 2 + 3)！")
 }
 
