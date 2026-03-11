@@ -6,59 +6,85 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/qxw/aipower-efficiency-pilot/internal/config"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
+	"github.com/qxw/aipower-efficiency-pilot/internal/types"
 )
 
 func main() {
 	log.Println("Generating mock data for Phase 3 demo...")
 
-	// 初始化 MySQL
-	mysqlCli, err := storage.NewMySQLClient("qxw:Gaoji_001#@tcp(10.8.132.147:3306)/aipower?parseTime=true")
+	// 1. 加载配置
+	cfg, err := config.LoadConfig("configs/config.yaml")
+	if err != nil {
+		log.Fatalf("无法加载配置: %v", err)
+	}
+
+	// 2. 初始化存储客户端
+	mysqlCli, err := storage.NewMySQLClient(cfg.MySQL.DSN)
 	if err != nil {
 		log.Fatalf("Failed to connect MySQL: %v", err)
 	}
 
-	// 1. 创建资源池
-	poolConfigs := []struct {
-		ID               string
-		Name             string
-		Scene            string
-		GPUModel         string
-		HardwareFeatures string
-		SlicingMode      string
-		Priority         string
-		Description      string
-	}{
+	redisCli, err := storage.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	if err != nil {
+		log.Fatalf("Failed to connect Redis: %v", err)
+	}
+
+	// 2.5 清空数据
+	fmt.Println("清理 MySQL 和 Redis...")
+	mysqlCli.TruncateTable()
+	mysqlCli.RawExec("TRUNCATE TABLE pool_pricing")
+	mysqlCli.RawExec("TRUNCATE TABLE daily_billing_snapshot")
+	mysqlCli.RawExec("TRUNCATE TABLE resource_pool")
+	mysqlCli.RawExec("TRUNCATE TABLE insight_reports")
+	redisCli.FlushDB()
+
+	// 3. 创建定价配置
+	fmt.Println("注入资源池定价配置...")
+	pricingList := []storage.PoolPricing{
+		{PoolID: "infer-a100-full-pool", GPUModel: "NVIDIA A100-80GB", BasePricePerHour: 55.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.35, SlicingWeightMPS: 0.5, SlicingWeightTS: 0.6},
+		{PoolID: "train-a100-mig-pool", GPUModel: "NVIDIA A100-40GB", BasePricePerHour: 45.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.35, SlicingWeightMPS: 0.5, SlicingWeightTS: 0.6},
+		{PoolID: "dev-h100-mps-pool", GPUModel: "NVIDIA H100", BasePricePerHour: 85.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.4, SlicingWeightMPS: 0.6, SlicingWeightTS: 0.7},
+		{PoolID: "batch-v100-ts-pool", GPUModel: "NVIDIA V100", BasePricePerHour: 30.0, SlicingWeightFull: 1.0, SlicingWeightMIG: 0.3, SlicingWeightMPS: 0.4, SlicingWeightTS: 0.5},
+	}
+	for _, p := range pricingList {
+		mysqlCli.SavePoolPricing(&p)
+	}
+
+	// 4. 创建资源池
+	fmt.Println("注入资源池资产配置...")
+	poolConfigs := []storage.ResourcePool{
 		{ID: "infer-a100-full-pool", Name: "A100推理完整池", Scene: "推理", GPUModel: "A100-80GB", HardwareFeatures: "NVLink", SlicingMode: "Full", Priority: "High", Description: "生产环境推理池"},
 		{ID: "train-a100-mig-pool", Name: "A100训练MIG池", Scene: "训练", GPUModel: "A100-40GB", HardwareFeatures: "MIG", SlicingMode: "MIG", Priority: "High", Description: "训练任务MIG池"},
 		{ID: "dev-h100-mps-pool", Name: "H100研发MPS池", Scene: "研发", GPUModel: "H100", HardwareFeatures: "MPS", SlicingMode: "MPS", Priority: "Low", Description: "研发测试MPS池"},
 		{ID: "batch-v100-ts-pool", Name: "V100批处理TS池", Scene: "批处理", GPUModel: "V100", HardwareFeatures: "TimeSlicing", SlicingMode: "TS", Priority: "Low", Description: "批处理任务TS池"},
 	}
-
 	for _, p := range poolConfigs {
-		mysqlCli.UpsertResourcePool(&storage.ResourcePool{
-			ID:               p.ID,
-			Name:             p.Name,
-			Scene:            p.Scene,
-			GPUModel:         p.GPUModel,
-			HardwareFeatures: p.HardwareFeatures,
-			SlicingMode:      p.SlicingMode,
-			Priority:         p.Priority,
-			Description:      p.Description,
-		})
-		log.Printf("Created pool: %s", p.ID)
+		mysqlCli.UpsertResourcePool(&p)
+		mysqlCli.UpdateResourcePoolMetadata(&p)
 	}
 
-	// 2. 创建每日账单快照 (过去7天)
+	// 5. 建立节点池对应关系 (Redis)
+	fmt.Println("建立节点池映射到 Redis...")
+	nodes := []string{"gpu-node-01", "gpu-node-02", "gpu-node-03", "gpu-node-04", "gpu-node-05"}
+	pools := []string{"infer-a100-full-pool", "train-a100-mig-pool", "dev-h100-mps-pool", "batch-v100-ts-pool"}
+	for i, node := range nodes {
+		poolID := pools[i%len(pools)]
+		redisCli.SaveNodePoolID(node, poolID)
+		log.Printf("Saved node-pool mapping: %s -> %s", node, poolID)
+	}
+
+	// 6. 创建每日账单快照 (过去7天)
+	fmt.Println("生成过去 7 天的日级账单快照...")
 	baseDate := time.Now().AddDate(0, 0, -7)
+	namespaces := []string{"ml-platform", "default", "research", "production"}
 	poolCosts := map[string]float64{
 		"infer-a100-full-pool":  1500.0,
-		"train-a100-mig-pool":   2200.0,
-		"dev-h100-mps-pool":     800.0,
-		"batch-v100-ts-pool":    500.0,
+		"train-a100-mig-pool":  2200.0,
+		"dev-h100-mps-pool":    800.0,
+		"batch-v100-ts-pool":   500.0,
 	}
-
-	namespaces := []string{"ml-platform", "default", "research", "production"}
 
 	for i := 0; i < 7; i++ {
 		date := baseDate.AddDate(0, 0, i)
@@ -77,10 +103,10 @@ func main() {
 			snapshot := &storage.DailyBillingSnapshot{
 				SnapshotDate:    dateStr,
 				PoolID:         poolID,
-				Namespace:       namespaces[rand.Intn(len(namespaces))],
-				TotalCost:       cost,
-				AvgUtilP95:      util,
-				MaxMemGiB:       40 + rand.Float64()*40,
+				Namespace:      namespaces[rand.Intn(len(namespaces))],
+				TotalCost:      cost,
+				AvgUtilP95:     util,
+				MaxMemGiB:      40 + rand.Float64()*40,
 				PodSessionCount: 5 + rand.Intn(20),
 			}
 			mysqlCli.UpsertDailySnapshot(snapshot)
@@ -88,39 +114,37 @@ func main() {
 	}
 	log.Println("Created daily billing snapshots")
 
-	// 3. 创建 Pod 会话记录 (带低利用率数据)
+	// 7. 创建 Pod 会话记录 (带低利用率数据)
+	fmt.Println("生成已结算的 Pod 会话记录...")
 	sessions := []struct {
-		PodName      string
-		Namespace    string
-		PoolID       string
-		SlicingMode  string
-		GPUUtilAvg   float64
-		CostAmount   float64
+		PodName     string
+		Namespace   string
+		PoolID      string
+		SlicingMode string
+		GPUUtilAvg  float64
+		CostAmount  float64
 	}{
 		// 低利用率 Pod (需要降级)
 		{"llm-inference-001", "ml-platform", "infer-a100-full-pool", "Full", 18.5, 45.2},
 		{"llm-inference-002", "ml-platform", "infer-a100-full-pool", "Full", 22.3, 52.1},
 		{"llm-inference-003", "ml-platform", "infer-a100-full-pool", "Full", 25.0, 48.9},
 		{"bert-serving-001", "production", "infer-a100-full-pool", "Full", 28.7, 35.6},
-
 		// 中等利用率 Pod
 		{"stable-diffusion-001", "research", "train-a100-mig-pool", "MIG", 55.2, 120.5},
 		{"gpt-finetune-001", "ml-platform", "train-a100-mig-pool", "MIG", 62.8, 180.3},
-
 		// 高利用率 Pod
 		{"distributed-training-001", "ml-platform", "train-a100-mig-pool", "MIG", 85.5, 250.8},
 		{"distributed-training-002", "ml-platform", "train-a100-mig-pool", "MIG", 88.2, 265.4},
-
 		// 研发池 Pod
 		{"dev-experiment-001", "default", "dev-h100-mps-pool", "MPS", 35.6, 15.2},
 		{"dev-experiment-002", "default", "dev-h100-mps-pool", "MPS", 42.1, 18.7},
-
 		// 批处理池 Pod
 		{"batch-job-001", "default", "batch-v100-ts-pool", "TS", 60.5, 8.5},
 		{"batch-job-002", "default", "batch-v100-ts-pool", "TS", 55.8, 7.2},
 	}
 
 	startTime := time.Now().AddDate(0, 0, -7)
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i, s := range sessions {
 		start := startTime.Add(time.Duration(i*12) * time.Hour)
 		end := start.Add(time.Duration(4+rand.Intn(20)) * time.Hour)
@@ -137,8 +161,8 @@ func main() {
 			TeamLabel:    s.Namespace,
 			ProjectLabel: "demo-project",
 			GPUUtilAvg:   s.GPUUtilAvg,
-			GPUUtilMax:   s.GPUUtilAvg + 10 + rand.Float64()*15,
-			MemUsedMax:   uint64(20 + rand.Intn(60)) * 1024 * 1024 * 1024,
+			GPUUtilMax:  s.GPUUtilAvg + 10 + rand.Float64()*15,
+			MemUsedMax:  uint64(20+rand.Intn(60)) * 1024 * 1024 * 1024,
 			PowerUsageAvg: 150 + rand.Float64()*200,
 			CostAmount:   s.CostAmount,
 		}
@@ -146,7 +170,50 @@ func main() {
 	}
 	log.Println("Created pod session records")
 
-	// 4. 创建 AI 诊断报告 (insight_reports)
+	// 8. 创建活跃 Pod 数据 (写入 Redis)
+	fmt.Println("生成当前活跃 Pod (写入 Redis)...")
+	activePods := []struct {
+		PodName     string
+		Namespace   string
+		NodeName    string
+		PoolID      string
+		SlicingMode string
+	}{
+		{"active-inference-001", "ml-platform", "gpu-node-01", "infer-a100-full-pool", "Full"},
+		{"active-inference-002", "production", "gpu-node-01", "infer-a100-full-pool", "Full"},
+		{"active-training-001", "ml-platform", "gpu-node-02", "train-a100-mig-pool", "MIG"},
+		{"active-training-002", "ml-platform", "gpu-node-03", "train-a100-mig-pool", "MIG"},
+		{"active-dev-001", "default", "gpu-node-04", "dev-h100-mps-pool", "MPS"},
+		{"active-batch-001", "default", "gpu-node-05", "batch-v100-ts-pool", "TS"},
+	}
+
+	for i, p := range activePods {
+		trace := &types.PodTrace{
+			Namespace:   p.Namespace,
+			PodName:     p.PodName,
+			PodUID:      fmt.Sprintf("active-uid-%d", i),
+			NodeName:    p.NodeName,
+			PoolID:      p.PoolID,
+			SlicingMode: types.SlicingMode(p.SlicingMode),
+			TeamLabel:   p.Namespace,
+			StartTime:   time.Now().Add(-time.Duration(r.Intn(5)) * time.Hour),
+			Metrics: &types.GPUMetrics{
+				GPUUtilAvg:    r.Float64() * 80,
+				GPUUtilMax:    r.Float64() * 100,
+				MemUsedBytes:  uint64(r.Int63n(60 * 1024 * 1024 * 1024)),
+				MemTotalBytes: 80 * 1024 * 1024 * 1024,
+				PowerUsageW:   100 + r.Float64()*300,
+				LastUpdate:    time.Now(),
+			},
+		}
+
+		mysqlCli.SaveLifeTrace(trace)
+		redisCli.SavePodTrace(trace)
+	}
+	log.Println("Created active pods in Redis")
+
+	// 9. 创建 AI 诊断报告
+	fmt.Println("生成 AI 诊断报告...")
 	reports := []struct {
 		PoolID     string
 		ReportType string
@@ -214,8 +281,11 @@ func main() {
 	// 打印汇总
 	fmt.Println("\n========== Mock Data Summary ==========")
 	fmt.Println("✓ Resource Pools: 4")
+	fmt.Println("✓ Pool Pricing: 4")
+	fmt.Println("✓ Node-Pool Mappings (Redis): 5")
 	fmt.Println("✓ Daily Snapshots: 28 (7 days x 4 pools)")
-	fmt.Println("✓ Pod Sessions: 13")
+	fmt.Println("✓ Pod Sessions: 12")
+	fmt.Println("✓ Active Pods (Redis): 6")
 	fmt.Println("✓ Insight Reports: 4")
 	fmt.Println("========================================")
 	fmt.Println("\nDemo data ready for Phase 3 testing!")
