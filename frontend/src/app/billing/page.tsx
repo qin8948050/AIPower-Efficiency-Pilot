@@ -241,7 +241,15 @@ export default function BillingPage() {
                   <TableCell>{new Date(tx.StartTime).toLocaleString()}</TableCell>
                   <TableCell>¥{tx.CostAmount.toFixed(4)}</TableCell>
                   <TableCell className="text-right">
-                    <Badge variant={tx.Status === "Settled" ? "outline" : "secondary"}>
+                    <Badge
+                      variant={tx.Status === "Settled" ? "outline" : "default"}
+                      className={tx.Status === "Settled"
+                        ? "border-emerald-200 text-emerald-700 bg-emerald-50 text-[10px] font-black px-2.5 py-1 uppercase"
+                        : tx.Status === "Auditing"
+                        ? "bg-amber-500 text-white text-[10px] font-black px-2.5 py-1 uppercase"
+                        : "bg-indigo-600 text-white animate-pulse text-[10px] font-black px-2.5 py-1 uppercase shadow-lg shadow-indigo-200"
+                      }
+                    >
                       {tx.Status === "Settled" ? "已结算" : tx.Status === "Auditing" ? "审计中" : "运行中"}
                     </Badge>
                   </TableCell>
