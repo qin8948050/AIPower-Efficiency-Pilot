@@ -53,7 +53,8 @@ func main() {
 	mysqlClient.RawExec("TRUNCATE TABLE daily_billing_snapshot")
 	mysqlClient.RawExec("TRUNCATE TABLE resource_pool")
 	mysqlClient.RawExec("TRUNCATE TABLE insight_reports")
-		mysqlClient.RawExec("TRUNCATE TABLE life_trace")
+	mysqlClient.RawExec("TRUNCATE TABLE governance_executions")
+	mysqlClient.RawExec("TRUNCATE TABLE life_trace")
 	redisClient.FlushDB()
 
 	// 2.6 注入定价配置 (Phase 2 核心)
@@ -440,6 +441,136 @@ func main() {
 	}
 	fmt.Println("Created insight reports")
 
-	fmt.Println("\n全量 Mock 数据注入完成 (Phase 1 + 2 + 3)！")
+	// 9. 生成治理执行记录 (Phase 4)
+	fmt.Println("生成治理执行记录...")
+
+	executions := []struct {
+		ReportID     uint
+		TaskName     string
+		Namespace    string
+		ActionType   string
+		FromPool     string
+		ToPool       string
+		FromGPU      int
+		ToGPU        int
+		PatchType    string
+		PatchContent string
+		Status       string
+	}{
+		// 已完成
+		{
+			ReportID:     1,
+			TaskName:     "pytorchjob-historical",
+			Namespace:    "ai-platform",
+			ActionType:   "downgrade_migrate",
+			FromPool:     "Train-A100-Full-Pool",
+			ToPool:       "Dev-T4-TS-Pool",
+			FromGPU:      8,
+			ToGPU:        4,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"spec":{"containers":[{"name":"*","resources":{"limits":{"nvidia.com/gpu":"4"}}},"metadata":{"labels":{"governance.migration/pending":"true","governance.migration/to-pool":"Dev-T4-TS-Pool"}}]}`,
+			Status:       "completed",
+		},
+		// 执行中
+		{
+			ReportID:     2,
+			TaskName:     "pytorchjob-cv-train",
+			Namespace:    "ai-platform",
+			ActionType:   "downgrade_migrate",
+			FromPool:     "Train-A100-Full-Pool",
+			ToPool:       "Dev-T4-TS-Pool",
+			FromGPU:      8,
+			ToGPU:        4,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"spec":{"containers":[{"name":"*","resources":{"limits":{"nvidia.com/gpu":"4"}}},"metadata":{"labels":{"governance.migration/pending":"true","governance.migration/to-pool":"Dev-T4-TS-Pool"}}]}`,
+			Status:       "executing",
+		},
+		// 待执行
+		{
+			ReportID:     3,
+			TaskName:     "pytorchjob-nlp-training",
+			Namespace:    "data-science",
+			ActionType:   "downgrade",
+			FromPool:     "Train-H800-Full-Pool",
+			ToPool:       "Train-H800-Full-Pool",
+			FromGPU:      8,
+			ToGPU:        4,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"spec":{"containers":[{"name":"*","resources":{"limits":{"nvidia.com/gpu":"4"}}}]}}`,
+			Status:       "pending",
+		},
+		// 失败
+		{
+			ReportID:     4,
+			TaskName:     "pytorchjob-search-serving",
+			Namespace:    "inference-prod",
+			ActionType:   "migrate",
+			FromPool:     "Dev-T4-TS-Pool",
+			ToPool:       "Infer-L4-MPS-Pool",
+			FromGPU:      8,
+			ToGPU:        8,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"metadata":{"labels":{"governance.migration/pending":"true","governance.migration/to-pool":"Infer-L4-MPS-Pool"}}}`,
+			Status:       "failed",
+		},
+		// 待执行
+		{
+			ReportID:     5,
+			TaskName:     "pytorchjob-cv-dev",
+			Namespace:    "ai-platform",
+			ActionType:   "downgrade",
+			FromPool:     "Dev-T4-TS-Pool",
+			ToPool:       "Dev-T4-TS-Pool",
+			FromGPU:      4,
+			ToGPU:        1,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"spec":{"containers":[{"name":"*","resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}`,
+			Status:       "pending",
+		},
+		// 已取消
+		{
+			ReportID:     6,
+			TaskName:     "pytorchjob-cancelled",
+			Namespace:    "data-science",
+			ActionType:   "migrate",
+			FromPool:     "Train-A100-Full-Pool",
+			ToPool:       "Dev-T4-TS-Pool",
+			FromGPU:      8,
+			ToGPU:        8,
+			PatchType:    "strategic-merge-patch",
+			PatchContent: `{"metadata":{"labels":{"governance.migration/pending":"true","governance.migration/to-pool":"Dev-T4-TS-Pool"}}}`,
+			Status:       "cancelled",
+		},
+	}
+
+	for i, e := range executions {
+		exec := &storage.GovernanceExecution{
+			ReportID:     e.ReportID,
+			TaskName:     e.TaskName,
+			Namespace:    e.Namespace,
+			ActionType:   e.ActionType,
+			FromPool:     e.FromPool,
+			ToPool:       e.ToPool,
+			FromGPU:      e.FromGPU,
+			ToGPU:        e.ToGPU,
+			PatchType:    e.PatchType,
+			PatchContent: e.PatchContent,
+			Status:       e.Status,
+		}
+		mysqlClient.SaveGovernanceExecution(exec)
+
+		// 为已完成和失败的添加执行时间
+		if e.Status == "completed" || e.Status == "failed" {
+			execTime := time.Now().Add(-time.Duration(i+1) * time.Hour)
+			mysqlClient.RawExec(fmt.Sprintf("UPDATE governance_executions SET executed_at = '%s' WHERE id = %d",
+				execTime.Format("2006-01-02 15:04:05"), exec.ID))
+		}
+		if e.Status == "failed" {
+			mysqlClient.RawExec(fmt.Sprintf("UPDATE governance_executions SET error_msg = 'Pod not found or insufficient permissions' WHERE id = %d", exec.ID))
+		}
+	}
+	fmt.Println("Created governance executions")
+
+	fmt.Println("\n全量 Mock 数据注入完成 (Phase 1 + 2 + 3 + 4)！")
 }
 

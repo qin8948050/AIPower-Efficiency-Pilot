@@ -20,6 +20,7 @@ import {
   TrendingDown,
   FileText,
   DollarSign,
+  Play,
 } from "lucide-react";
 
 interface Recommendation {
@@ -457,29 +458,71 @@ export default function InsightsPage() {
                     {(() => {
                       const approvedRec = parseRecommendations(`[${selectedReport.approved_recommendation}]`)[0];
                       if (!approvedRec) return null;
+
+                      const actionTypeMap: Record<string, string> = {
+                        "降配": "downgrade",
+                        "迁移": "migrate",
+                        "降配+迁移": "downgrade_migrate",
+                      };
+
+                      const handleExecute = async () => {
+                        try {
+                          const res = await fetch("http://localhost:8080/api/v4/governance/execute", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              report_id: parseInt(selectedReport.id),
+                              task_name: selectedReport.task_name,
+                              namespace: selectedReport.namespace,
+                              action_type: actionTypeMap[approvedRec.action_type] || approvedRec.action_type,
+                              from_pool: approvedRec.from_pool,
+                              to_pool: approvedRec.to_pool,
+                              from_gpu: approvedRec.from_gpu,
+                              to_gpu: approvedRec.to_gpu,
+                              execute_now: true,
+                            }),
+                          });
+                          if (res.ok) {
+                            alert("治理任务已提交执行，请前往「治理执行中心」查看进度");
+                          }
+                        } catch (error) {
+                          console.error("Failed to execute:", error);
+                          alert("执行失败，请重试");
+                        }
+                      };
+
                       return (
-                        <div className="p-3 bg-green-50 border-2 border-green-500 rounded-lg text-sm">
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2">
-                              <CheckCircle className="h-4 w-4 text-green-600" />
-                              <Badge variant="outline" className={
-                                approvedRec.action_type === "降配" ? "border-orange-500 text-orange-500" :
-                                approvedRec.action_type === "迁移" ? "border-blue-500 text-blue-500" :
-                                "border-purple-500 text-purple-500"
-                              }>
-                                {approvedRec.action_type}
-                              </Badge>
+                        <div className="space-y-3">
+                          <div className="p-3 bg-green-50 border-2 border-green-500 rounded-lg text-sm">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                                <Badge variant="outline" className={
+                                  approvedRec.action_type === "降配" ? "border-orange-500 text-orange-500" :
+                                  approvedRec.action_type === "迁移" ? "border-blue-500 text-blue-500" :
+                                  "border-purple-500 text-purple-500"
+                                }>
+                                  {approvedRec.action_type}
+                                </Badge>
+                              </div>
+                              <span className="font-mono text-xs">
+                                {approvedRec.from_pool} → {approvedRec.to_pool}
+                              </span>
                             </div>
-                            <span className="font-mono text-xs">
-                              {approvedRec.from_pool} → {approvedRec.to_pool}
-                            </span>
+                            <div className="text-muted-foreground mb-1">
+                              GPU: {approvedRec.from_gpu} → {approvedRec.to_gpu}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {approvedRec.reason}
+                            </div>
                           </div>
-                          <div className="text-muted-foreground mb-1">
-                            GPU: {approvedRec.from_gpu} → {approvedRec.to_gpu}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {approvedRec.reason}
-                          </div>
+                          <Button
+                            className="w-full bg-blue-600 hover:bg-blue-700"
+                            onClick={handleExecute}
+                          >
+                            <Play className="h-4 w-4 mr-2" />
+                            立即执行治理
+                          </Button>
                         </div>
                       );
                     })()}

@@ -119,7 +119,7 @@ type ResourcePool struct {
 func (ResourcePool) TableName() string { return "resource_pool" }
 
 func (m *MySQLClient) InitSchema() error {
-	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{}, &InsightReport{})
+	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{}, &InsightReport{}, &GovernanceExecution{})
 }
 
 // UpsertResourcePool 发现新池子时自动创建或更新硬指标 (型号、特性、模式)
@@ -436,5 +436,101 @@ func (m *MySQLClient) GetActivePodTrace(namespace, podName string) (*types.PodTr
 		PoolID:      lt.PoolID,
 		SlicingMode: types.SlicingMode(lt.SlicingMode),
 		StartTime:   lt.StartTime,
+	}, nil
+}
+
+// GovernanceExecution 治理执行记录
+type GovernanceExecution struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	ReportID     uint       `gorm:"column:report_id;index" json:"report_id"`
+	TaskName     string     `gorm:"column:task_name;index" json:"task_name"`
+	Namespace    string     `gorm:"column:namespace" json:"namespace"`
+	ActionType   string     `gorm:"column:action_type" json:"action_type"` // downgrade/migrate/downgrade_migrate
+	FromPool     string     `gorm:"column:from_pool" json:"from_pool"`
+	ToPool       string     `gorm:"column:to_pool" json:"to_pool"`
+	FromGPU      int        `gorm:"column:from_gpu" json:"from_gpu"`
+	ToGPU        int        `gorm:"column:to_gpu" json:"to_gpu"`
+	PatchType    string     `gorm:"column:patch_type" json:"patch_type"`     // strategic-merge-patch, json-patch
+	PatchContent string     `gorm:"column:patch_content;type:text" json:"patch_content"` // patch 内容
+	Status       string     `gorm:"column:status;default:'pending';index" json:"status"` // pending/executing/completed/failed/cancelled
+	ScheduledAt  *time.Time `gorm:"column:scheduled_at" json:"scheduled_at,omitempty"`
+	ExecutedAt   *time.Time `gorm:"column:executed_at" json:"executed_at,omitempty"`
+	ErrorMsg     string     `gorm:"column:error_msg" json:"error_msg,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"-"`
+}
+
+func (GovernanceExecution) TableName() string {
+	return "governance_executions"
+}
+
+// SaveGovernanceExecution 保存治理执行记录
+func (m *MySQLClient) SaveGovernanceExecution(exec *GovernanceExecution) error {
+	return m.db.Create(exec).Error
+}
+
+// GetGovernanceExecutionByID 获取治理执行记录
+func (m *MySQLClient) GetGovernanceExecutionByID(id uint) (*GovernanceExecution, error) {
+	var exec GovernanceExecution
+	err := m.db.Where("id = ?", id).First(&exec).Error
+	if err != nil {
+		return nil, err
+	}
+	return &exec, nil
+}
+
+// UpdateGovernanceExecutionStatus 更新治理执行状态
+func (m *MySQLClient) UpdateGovernanceExecutionStatus(id uint, status string) error {
+	return m.db.Model(&GovernanceExecution{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// UpdateGovernanceExecutionStatusWithError 更新治理执行状态（带错误信息）
+func (m *MySQLClient) UpdateGovernanceExecutionStatusWithError(id uint, status, errMsg string) error {
+	return m.db.Model(&GovernanceExecution{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":    status,
+		"error_msg": errMsg,
+	}).Error
+}
+
+// MarkGovernanceExecutionCompleted 标记治理执行完成
+func (m *MySQLClient) MarkGovernanceExecutionCompleted(id uint) error {
+	now := time.Now()
+	return m.db.Model(&GovernanceExecution{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":     "completed",
+		"executed_at": now,
+	}).Error
+}
+
+// ListGovernanceExecutions 获取治理执行列表
+func (m *MySQLClient) ListGovernanceExecutions(status string, limit, offset int) ([]GovernanceExecution, int64, error) {
+	var execs []GovernanceExecution
+	var total int64
+
+	query := m.db.Model(&GovernanceExecution{})
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	err := query.Count(&total).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	err = query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&execs).Error
+	return execs, total, err
+}
+
+// GetGovernanceStats 获取治理统计
+func (m *MySQLClient) GetGovernanceStats() (map[string]int64, error) {
+	var totalExecuted, pendingCount int64
+
+	// 已完成+失败+取消 = 已执行
+	m.db.Model(&GovernanceExecution{}).Where("status IN ?", []string{"completed", "failed", "cancelled"}).Count(&totalExecuted)
+	// 待执行+执行中
+	m.db.Model(&GovernanceExecution{}).Where("status IN ?", []string{"pending", "executing"}).Count(&pendingCount)
+
+	return map[string]int64{
+		"total_executed": totalExecuted,
+		"pending_count":  pendingCount,
 	}, nil
 }

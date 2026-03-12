@@ -10,6 +10,7 @@ import (
 	"github.com/qxw/aipower-efficiency-pilot/internal/aggregator"
 	"github.com/qxw/aipower-efficiency-pilot/internal/config"
 	"github.com/qxw/aipower-efficiency-pilot/internal/llm"
+	"github.com/qxw/aipower-efficiency-pilot/internal/pilot"
 	"github.com/qxw/aipower-efficiency-pilot/internal/storage"
 	"time"
 )
@@ -407,6 +408,89 @@ func main() {
 			}
 
 			c.JSON(http.StatusOK, gin.H{"status": "updated"})
+		})
+	}
+
+	// Phase 4: Governance Executor API
+	governanceExecutor, err := pilot.NewGovernanceExecutor(cfg.K8s.Kubeconfig, mysqlCli)
+	if err != nil {
+		log.Fatalf("Failed to initialize governance executor: %v", err)
+	}
+
+	v4 := r.Group("/api/v4")
+	{
+		// 执行治理
+		v4.POST("/governance/execute", func(c *gin.Context) {
+			var req pilot.ExecuteRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			resp, err := governanceExecutor.Execute(c.Request.Context(), req)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, resp)
+		})
+
+		// 查询执行列表
+		v4.GET("/governance/executions", func(c *gin.Context) {
+			status := c.Query("status")
+			limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+			offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+			execs, total, err := governanceExecutor.ListExecutions(status, limit, offset)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"executions": execs,
+				"total":      total,
+			})
+		})
+
+		// 查询执行详情
+		v4.GET("/governance/executions/:id", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+				return
+			}
+
+			exec, err := governanceExecutor.GetExecution(uint(id))
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+				return
+			}
+			c.JSON(http.StatusOK, exec)
+		})
+
+		// 取消执行
+		v4.PUT("/governance/executions/:id/cancel", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+				return
+			}
+
+			if err := governanceExecutor.CancelExecution(uint(id)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+		})
+
+		// 治理统计
+		v4.GET("/governance/stats", func(c *gin.Context) {
+			stats, err := governanceExecutor.GetStats()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, stats)
 		})
 	}
 

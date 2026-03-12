@@ -16,6 +16,7 @@ const BREADCRUMBS: Record<string, { main: string; sub: string }> = {
   "/billing/teams": { main: "成本分摊中心", sub: "业务维度分摊" },
   "/billing/pools": { main: "成本分摊中心", sub: "资源池效能量化" },
   "/insights": { main: "智能治理", sub: "AI 诊断报告" },
+  "/pilot": { main: "智能治理", sub: "治理执行中心" },
   "/admin/pools": { main: "配置中心", sub: "资源池资产管理" },
   "/admin/pricing": { main: "配置中心", sub: "池化定价管理" },
 };
