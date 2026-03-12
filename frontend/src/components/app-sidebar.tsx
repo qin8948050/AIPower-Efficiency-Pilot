@@ -4,7 +4,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
-  LayoutDashboard,
+  Cpu,
   Wallet,
   BrainCircuit,
   Settings,
@@ -17,6 +17,7 @@ import {
   FileText,
   Users,
   Database,
+  LayoutDashboard,
 } from "lucide-react";
 
 import {
@@ -124,7 +125,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <div className="flex items-center gap-2 px-4 py-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <LayoutDashboard className="h-5 w-5" />
+            <Cpu className="h-5 w-5" />
           </div>
           <div className="flex flex-col gap-0.5 overflow-hidden">
             <span className="font-semibold leading-none truncate">

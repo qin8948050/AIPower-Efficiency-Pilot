@@ -121,7 +121,7 @@ export default function PilotPage() {
     <div className="flex-1 space-y-4 p-8 pt-6">
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold flex items-center gap-2">
-          <ShieldCheck className="h-8 w-8 text-green-600" />治理执行中心
+          <TrendingDown className="h-8 w-8 text-indigo-600" />治理执行中心
         </h2>
         <Button variant="outline" size="sm" onClick={fetchExecutions} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}刷新
