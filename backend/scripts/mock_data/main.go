@@ -305,80 +305,115 @@ func main() {
 
 	// 根据任务不匹配场景生成报告
 	insightReports := []struct {
-		TaskName   string  // 任务名
-		Namespace  string  // 命名空间
-		Team       string  // 负责团队
-		PoolID     string  // 当前资源池
-		ReportType string
-		Summary    string
-		RootCause  string
-		Actions    string
-		EstSavings float64
-		Status     string
+		TaskName                  string  // 任务名
+		Namespace                 string  // 命名空间
+		Team                      string  // 负责团队
+		PoolID                    string  // 当前资源池
+		Problem                   string  // 问题描述: 利用率低, 抖动高, 特性不匹配
+		ReportType                string
+		Summary                   string
+		RootCause                 string
+		Recommendations           string
+		ApprovedRecommendation   string  // 批准的建议（JSON格式）
+		EstSavings                float64
+		Status                    string
 	}{
-		// 场景1: CV-Team 研发测试任务 - 降级建议
+		// 场景1: 仅1种建议 - 简单降配场景
+		// 问题：利用率低，优先级低，直接在当前池降配即可
+		{
+			TaskName:   "pytorchjob-cv-dev",
+			Namespace:  "ai-platform",
+			Team:       "CV-Team",
+			PoolID:     "Dev-T4-TS-Pool",
+			Problem:    "利用率低",
+			ReportType: "downgrade",
+			Summary:    "任务 [pytorchjob-cv-dev] 平均利用率仅 15%，属于开发测试任务。",
+			RootCause:  "开发测试任务对性能要求不高，可在当前池降配 GPU 数量以节省成本。",
+			// 仅1种建议：在当前池降配
+			Recommendations: `[{"action_type":"降配","from_gpu":4,"to_gpu":1,"from_pool":"Dev-T4-TS-Pool","to_pool":"Dev-T4-TS-Pool","est_savings":3200,"reason":"开发任务资源需求低，直接降配"}]`,
+			EstSavings: 3200.0,
+			Status:     "pending",
+		},
+		// 场景2: 2种建议 - 迁移 vs 降配+迁移
+		// 问题：利用率低，可选择保留当前池降配，或迁移到低成本池
 		{
 			TaskName:   "pytorchjob-cv-train",
 			Namespace:  "ai-platform",
 			Team:       "CV-Team",
 			PoolID:     "Train-A100-Full-Pool",
+			Problem:    "利用率低",
 			ReportType: "downgrade",
 			Summary:    "任务 [pytorchjob-cv-train] 平均利用率仅 18.5%，被调度在昂贵的高端训练池。",
-			RootCause:  "该任务无需 NVLink/FP8 特性，应迁移至 Dev-T4-TS-Pool 降低成本。",
-			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-cv-train-worker-1","namespace":"ai-platform","team":"CV-Team","from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool"}]`,
-			EstSavings: 8500.0,
+			RootCause:  "该任务无需 NVLink/FP8 特性，可选择降配或迁移至低成本池。",
+			// 2种建议：
+			// 1. 降配：保留当前池，降配 GPU 数量
+			// 2. 降配+迁移：降配同时迁移到低成本池（节省更多）
+			Recommendations: `[
+				{"action_type":"降配","from_gpu":8,"to_gpu":4,"from_pool":"Train-A100-Full-Pool","to_pool":"Train-A100-Full-Pool","est_savings":8500,"reason":"保留当前池特性，简单降配"},
+				{"action_type":"降配+迁移","from_gpu":8,"to_gpu":4,"from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool","est_savings":12500,"reason":"降配并迁移到低成本池，节省更多"}
+			]`,
+			EstSavings: 12500.0, // 默认选节省最多的
 			Status:     "pending",
 		},
-		// 场景2: Search-Algo 推理任务 - 稳定性升级建议（费用增加）
+		// 场景3: 3种建议 - 降配、迁移、降配+迁移
+		// 问题：利用率低，有多种优化路径可选
+		{
+			TaskName:   "pytorchjob-nlp-training",
+			Namespace:  "data-science",
+			Team:       "NLP-Group",
+			PoolID:     "Train-H800-Full-Pool",
+			Problem:    "利用率低",
+			ReportType: "downgrade",
+			Summary:    "任务 [pytorchjob-nlp-training] 利用 NVLink/FP8 特性但利用率仅 12%，造成高端资源浪费。",
+			RootCause:  "该任务无需高端特性，可选择多种优化方案。",
+			// 3种建议：
+			// 1. 降配：保留当前 H800 池，降配 GPU
+			// 2. 迁移：不降配，迁移到 A100 池（保留算力）
+			// 3. 降配+迁移：降配并迁移到 A100 池（节省最多）
+			Recommendations: `[
+				{"action_type":"降配","from_gpu":8,"to_gpu":4,"from_pool":"Train-H800-Full-Pool","to_pool":"Train-H800-Full-Pool","est_savings":15000,"reason":"保留NVLink+FP8高端特性，仅降配GPU数量"},
+				{"action_type":"迁移","from_gpu":8,"to_gpu":8,"from_pool":"Train-H800-Full-Pool","to_pool":"Train-A100-Full-Pool","est_savings":8000,"reason":"迁移到A100池，保留8卡算力，降低单卡成本"},
+				{"action_type":"降配+迁移","from_gpu":8,"to_gpu":4,"from_pool":"Train-H800-Full-Pool","to_pool":"Train-A100-Full-Pool","est_savings":22000,"reason":"降配并迁移到A100池，大幅降低成本"}
+			]`,
+			EstSavings: 22000.0,
+			Status:     "pending",
+		},
+		// 场景4: 稳定性问题 - 抖动高（费用增加场景）
 		{
 			TaskName:   "pytorchjob-search-serving",
 			Namespace:  "inference-prod",
 			Team:       "Search-Algo",
 			PoolID:     "Dev-T4-TS-Pool",
+			Problem:    "抖动高",
 			ReportType: "isolation",
-			Summary:    "任务 [pytorch 算力抖动job-search-serving]达 22.5%，影响服务质量。",
-			RootCause:  "该任务对延迟敏感，TS 池资源共享导致抖动过大，建议迁移至 Infer-L4-MPS-Pool 以保障 SLA。",
-			Actions:    `[{"type":"pool_change","pod_name":"pytorchjob-search-serving-worker-1","namespace":"inference-prod","team":"Search-Algo","from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
-			EstSavings: -2800.0, // 负数表示费用增加
+			Summary:    "任务 [pytorchjob-search-serving] 算力抖动达 22.5%，影响服务质量。",
+			RootCause:  "该任务对延迟敏感，TS 池资源共享导致抖动过大。",
+			// 2种建议（解决抖动，费用会增加）：
+			// 1. 迁移到 MIG 池：硬隔离，解决抖动
+			// 2. 迁移到 MPS 池：中等隔离，平衡成本
+			Recommendations: `[
+				{"action_type":"迁移","from_gpu":8,"to_gpu":8,"from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-A100-MIG-Pool","est_savings":-2800,"reason":"MIG硬隔离，彻底解决抖动问题"},
+				{"action_type":"迁移","from_gpu":8,"to_gpu":8,"from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-L4-MPS-Pool","est_savings":-1200,"reason":"MPS中等隔离，平衡成本与稳定性"}
+			]`,
+			EstSavings: -1200.0, // 默认选增加较少的
 			Status:     "pending",
 		},
-		// 场景3: NLP-Group 训练任务 - 特性纠偏建议
-		{
-			TaskName:   "pytorchjob-nlp-sft",
-			Namespace:  "data-science",
-			Team:       "NLP-Group",
-			PoolID:     "Train-H800-Full-Pool",
-			ReportType: "downgrade",
-			Summary:    "任务 [pytorchjob-nlp-sft] 利用 NVLink/FP8 特性但利用率仅 12%，造成高端资源浪费。",
-			RootCause:  "该任务无需 NVLink/FP8 高端特性，利用率低于 30% 阈值，建议迁移至 Train-A100-Full-Pool。",
-			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-nlp-sft-worker-1","namespace":"data-science","team":"NLP-Group","from_pool":"Train-H800-Full-Pool","to_pool":"Train-A100-Full-Pool"}]`,
-			EstSavings: 15000.0,
-			Status:     "pending",
-		},
-		// 场景4: CV-Team 批量推理任务 - 优化建议
-		{
-			TaskName:   "pytorchjob-cv-batch-infer",
-			Namespace:  "inference-prod",
-			Team:       "CV-Team",
-			PoolID:     "Infer-A100-MIG-Pool",
-			ReportType: "downgrade",
-			Summary:    "任务 [pytorchjob-cv-batch-infer] 被调度至 MIG 池，吞吐量未充分发挥。",
-			RootCause:  "批量推理对延迟不敏感，MIG 硬隔离单价较高，建议迁移至 Infer-L4-MPS-Pool。",
-			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-cv-batch-infer-worker-1","namespace":"inference-prod","team":"CV-Team","from_pool":"Infer-A100-MIG-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
-			EstSavings: 4500.0,
-			Status:     "pending",
-		},
-		// 场景5: 已完成的优化（历史报告）
+		// 场景5: 已批准的优化（历史报告）
 		{
 			TaskName:   "pytorchjob-historical",
 			Namespace:  "ai-platform",
 			Team:       "NLP-Group",
 			PoolID:     "Train-A100-Full-Pool",
+			Problem:    "利用率低",
 			ReportType: "downgrade",
 			Summary:    "上一周期的降级建议已执行，资源利用率从 25% 提升至 55%。",
 			RootCause:  "通过将低利用率训练任务迁移至低成本池，释放了高端 GPU 资源。",
-			Actions:    "[]",
-			EstSavings: 9200.0,
+			Recommendations: `[
+				{"action_type":"降配","from_gpu":8,"to_gpu":4,"from_pool":"Train-A100-Full-Pool","to_pool":"Train-A100-Full-Pool","est_savings":8500,"reason":"保留当前池特性"},
+				{"action_type":"降配+迁移","from_gpu":8,"to_gpu":4,"from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool","est_savings":12500,"reason":"降配并迁移到低成本池"}
+			]`,
+			ApprovedRecommendation: `{"action_type":"降配+迁移","from_gpu":8,"to_gpu":4,"from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool","est_savings":12500,"reason":"降配并迁移到低成本池"}`,
+			EstSavings: 12500.0,
 			Status:     "approved",
 		},
 	}
@@ -387,17 +422,19 @@ func main() {
 	for i, r := range insightReports {
 		generatedAt := reportTime.Add(-time.Duration(i*12) * time.Hour)
 		report := &storage.InsightReport{
-			GeneratedAt: generatedAt,
-			TaskName:    r.TaskName,
-			Namespace:   r.Namespace,
-			Team:        r.Team,
-			PoolID:      r.PoolID,
-			ReportType:  r.ReportType,
-			Summary:     r.Summary,
-			RootCause:   r.RootCause,
-			Actions:     r.Actions,
-			EstSavings:  r.EstSavings,
-			Status:      r.Status,
+			GeneratedAt:              generatedAt,
+			TaskName:                 r.TaskName,
+			Namespace:                r.Namespace,
+			Team:                    r.Team,
+			PoolID:                  r.PoolID,
+			Problem:                 r.Problem,
+			ReportType:              r.ReportType,
+			Summary:                 r.Summary,
+			RootCause:               r.RootCause,
+			Recommendations:         r.Recommendations,
+			ApprovedRecommendation:  r.ApprovedRecommendation,
+			EstSavings:              r.EstSavings,
+			Status:                  r.Status,
 		}
 		mysqlClient.SaveInsightReport(report)
 	}

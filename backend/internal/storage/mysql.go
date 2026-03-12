@@ -345,20 +345,23 @@ func (m *MySQLClient) GetResourcePool(poolID string) (*ResourcePool, error) {
 // InsightReport AI 诊断报告模型
 // 核心对象是任务（Pod/PyTorchJob），而非资源池
 type InsightReport struct {
-	ID          uint      `gorm:"primaryKey"`
-	GeneratedAt time.Time `gorm:"column:generated_at"`
-	TaskName    string    `gorm:"column:task_name;index"`    // 任务名
-	Namespace   string    `gorm:"column:namespace"`           // 命名空间
-	Team        string    `gorm:"column:team"`                // 负责团队
-	PoolID      string    `gorm:"column:pool_id;index"`      // 当前所在资源池
-	ReportType  string    `gorm:"column:report_type"`
-	Summary     string    `gorm:"column:summary;type:text"`
-	RootCause   string    `gorm:"column:root_cause;type:text"`
-	Actions     string    `gorm:"column:actions;type:text"`
-	EstSavings  float64   `gorm:"column:est_savings"`
-	Status      string    `gorm:"column:status;default:'pending'"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             uint      `gorm:"primaryKey"`
+	GeneratedAt    time.Time `gorm:"column:generated_at"`
+	TaskName       string    `gorm:"column:task_name;index"`    // 任务名
+	Namespace      string    `gorm:"column:namespace"`           // 命名空间
+	Team           string    `gorm:"column:team"`                // 负责团队
+	PoolID         string    `gorm:"column:pool_id;index"`      // 当前所在资源池
+	Problem        string    `gorm:"column:problem"`            // 问题描述
+	ReportType     string    `gorm:"column:report_type"`
+	Summary        string    `gorm:"column:summary;type:text"`
+	RootCause      string    `gorm:"column:root_cause;type:text"`
+	Recommendations string    `gorm:"column:recommendations;type:text"` // JSON 格式的建议列表
+	ApprovedRecommendation string `gorm:"column:approved_recommendation;type:text"` // 批准的建议（JSON格式）
+	ApprovedAt     *time.Time `gorm:"column:approved_at"`   // 批准时间
+	EstSavings     float64   `gorm:"column:est_savings"`
+	Status         string    `gorm:"column:status;default:'pending'"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (InsightReport) TableName() string {
@@ -371,13 +374,16 @@ func (m *MySQLClient) SaveInsightReport(report *InsightReport) error {
 }
 
 // GetInsightReports 获取诊断报告列表
-func (m *MySQLClient) GetInsightReports(poolID string, limit, offset int) ([]InsightReport, int64, error) {
+func (m *MySQLClient) GetInsightReports(taskName, team string, limit, offset int) ([]InsightReport, int64, error) {
 	var reports []InsightReport
 	var total int64
 
 	query := m.db.Model(&InsightReport{})
-	if poolID != "" {
-		query = query.Where("pool_id = ?", poolID)
+	if taskName != "" {
+		query = query.Where("task_name LIKE ?", "%"+taskName+"%")
+	}
+	if team != "" {
+		query = query.Where("team = ?", team)
 	}
 
 	err := query.Count(&total).Error
@@ -402,6 +408,15 @@ func (m *MySQLClient) GetInsightReportByID(id uint) (*InsightReport, error) {
 // UpdateInsightReportStatus 更新报告状态
 func (m *MySQLClient) UpdateInsightReportStatus(id uint, status string) error {
 	return m.db.Model(&InsightReport{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// UpdateInsightReportRecommendation 更新报告选中的建议
+func (m *MySQLClient) UpdateInsightReportRecommendation(id uint, recommendation string) error {
+	now := time.Now()
+	return m.db.Model(&InsightReport{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"approved_recommendation": recommendation,
+		"approved_at":             now,
+	}).Error
 }
 
 func (m *MySQLClient) GetActivePodTrace(namespace, podName string) (*types.PodTrace, error) {

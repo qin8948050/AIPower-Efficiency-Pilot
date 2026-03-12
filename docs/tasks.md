@@ -85,7 +85,7 @@
 
 ---
 
-## 🟢 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [已完结 ✅]
+## ✅ 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [已完成]
 
 ### 后端 - LLM 集成层
 - [x] **创建 `backend/internal/llm/` 模块目录**
@@ -123,14 +123,40 @@
     - [x] "拒绝" 按钮
     - [x] 审批状态实时更新
 
-### 核心优化
+### 核心优化 - V2 增强
 - [x] **任务视角**：诊断对象从"资源池"转为"任务（Pod/PyTorchJob）"
 - [x] **团队归属**：报告关联团队（team_label）便于责任追踪
 - [x] **费用正负**：降级=节省（正数），稳定性升级=增加（负数）
 
+#### 治理建议增强（V2）- ✅ 已完成
+- [x] **任务画像扩展**：
+    - [x] TaskType（任务类型：training/inference/dev）
+    - [x] Priority（优先级：high/medium/low）
+    - [x] HardwareDeps（硬件依赖：NVLink, FP8, MIG, RDMA 等）
+    - [x] GPUCount（当前使用 GPU 数量）
+- [x] **动作类型**：
+    - [x] 降配：只减 GPU 数量，不换池
+    - [x] 迁移：只换池，不调规格
+    - [x] 降配+迁移：既减 GPU 又换池
+- [x] **多建议输出**：一个任务生成 1-3 条建议供选择
+- [x] **决策逻辑**：
+    - [x] 有硬件依赖 / High优先级 → 只降配不迁移
+    - [x] 无硬件依赖 + Low优先级 → 降配+迁移
+    - [x] Medium优先级 → 给出多种选择
+
+#### 前端审批增强 - ✅ 已完成
+- [x] **单选建议**：从多条建议中选择一条批准
+- [x] **最佳建议标识**：自动标识节省最多/增加最少的建议
+- [x] **批准记录**：保存批准的建议到数据库（approved_recommendation）
+- [x] **状态锁定**：批准/拒绝后不可再选择
+
 ### 配置与测试
 - [x] **配置管理**：在 `configs/config.yaml` 新增 LLM 配置项
-- [x] **单元测试**：`llm/summarizer_test.go` - 降维算法测试
+- [x] **单元测试**：
+    - [x] `llm/analyzer_test.go` - 降维算法测试
+    - [x] `TestGeneratePoolSummary` - 数据脱水测试
+    - [x] `TestMismatchDetection` - 任务-资源池不匹配检测测试
+    - [x] `TestReportPersistence` - 报告持久化测试
 - [x] **集成测试**：`mock_data` 脚本预置任务与资源池不匹配测试数据
 
 ## ⚪️ 第四阶段：可视化看板与闭环治理 (Governance & ROI) - [待启动 💤]

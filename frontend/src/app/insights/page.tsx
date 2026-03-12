@@ -22,17 +22,30 @@ import {
   DollarSign,
 } from "lucide-react";
 
+interface Recommendation {
+  action_type: string;  // 动作类型: 降配, 迁移, 降配+迁移
+  from_gpu: number;
+  to_gpu: number;
+  from_pool: string;
+  to_pool: string;
+  est_savings: number;
+  reason: string;
+}
+
 interface InsightReport {
   id: string;
   generated_at: string;
-  task_name: string;   // 任务名（Pod/PyTorchJob）
+  task_name: string;   // 任务名
   namespace: string;   // 命名空间
   team: string;        // 负责团队
   pool_id: string;    // 当前所在资源池
+  problem: string;    // 问题描述: 利用率低, 抖动高
   report_type: string;
   summary: string;
   root_cause: string;
-  actions: string;
+  recommendations: string;  // JSON 字符串，建议列表
+  approved_recommendation?: string;  // 批准的建议
+  approved_at?: string;  // 批准时间
   est_savings: number;
   status: string;
 }
@@ -47,6 +60,7 @@ export default function InsightsPage() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [selectedReport, setSelectedReport] = useState<InsightReport | null>(null);
+  const [selectedRecIndex, setSelectedRecIndex] = useState<number | null>(null);
 
   useEffect(() => {
     fetchReports();
@@ -84,15 +98,24 @@ export default function InsightsPage() {
 
   const updateStatus = async (id: string, status: string) => {
     try {
+      // 如果是批准，需要包含选中的建议
+      const body: any = { status };
+      if (status === "approved" && selectedRecIndex !== null && selectedReport) {
+        const recs = parseRecommendations(selectedReport.recommendations);
+        if (recs[selectedRecIndex]) {
+          body.recommendation = JSON.stringify(recs[selectedRecIndex]);
+        }
+      }
       await fetch(`http://localhost:8080/api/v3/insights/reports/${id}/status`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(body),
       });
       setReports(reports.map((r) => (r.id === id ? { ...r, status } : r)));
       if (selectedReport?.id === id) {
         setSelectedReport({ ...selectedReport, status });
       }
+      setSelectedRecIndex(null);
     } catch (error) {
       console.error("Failed to update status:", error);
     }
@@ -143,33 +166,26 @@ export default function InsightsPage() {
     }
   };
 
-  const parseActions = (actionsStr: string) => {
+  const parseRecommendations = (recommendationsStr: string) => {
     try {
-      return JSON.parse(actionsStr);
+      return JSON.parse(recommendationsStr);
     } catch {
       return [];
     }
   };
 
-  // 从 Actions 中提取任务名（Pod 名称）
-  const extractTaskName = (actionsStr: string): string => {
-    const actions = parseActions(actionsStr);
-    if (actions.length > 0 && actions[0].pod_name) {
-      // 提取任务前缀（如 pytorchjob-cv-train）而不是完整的 worker 名称
-      const podName = actions[0].pod_name;
-      const prefix = podName.split('-worker-')[0];
-      return prefix;
+  // 获取问题类型的显示文本
+  const getProblemText = (problem: string): string => {
+    switch (problem) {
+      case "利用率低":
+        return "利用率低";
+      case "抖动高":
+        return "抖动高";
+      case "特性不匹配":
+        return "特性不匹配";
+      default:
+        return problem || "一般问题";
     }
-    return "";
-  };
-
-  // 从 Actions 中提取命名空间
-  const extractNamespace = (actionsStr: string): string => {
-    const actions = parseActions(actionsStr);
-    if (actions.length > 0 && actions[0].namespace) {
-      return actions[0].namespace;
-    }
-    return "";
   };
 
   const formatDate = (dateStr: string) => {
@@ -273,7 +289,10 @@ export default function InsightsPage() {
                     className={`p-4 border rounded-lg cursor-pointer transition-all hover:bg-slate-50 ${
                       selectedReport?.id === report.id ? "border-primary bg-slate-50" : ""
                     }`}
-                    onClick={() => setSelectedReport(report)}
+                    onClick={() => {
+                      setSelectedReport(report);
+                      setSelectedRecIndex(null);
+                    }}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -335,6 +354,14 @@ export default function InsightsPage() {
                   {getStatusBadge(selectedReport.status)}
                 </div>
 
+                {/* Problem */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">问题类型:</span>
+                  <Badge variant={selectedReport.problem === "利用率低" ? "destructive" : "default"}>
+                    {getProblemText(selectedReport.problem)}
+                  </Badge>
+                </div>
+
                 {/* Summary */}
                 <div>
                   <h4 className="text-sm font-semibold mb-2">摘要</h4>
@@ -347,67 +374,154 @@ export default function InsightsPage() {
                   <p className="text-sm text-muted-foreground">{selectedReport.root_cause}</p>
                 </div>
 
-                {/* Actions */}
+                {/* Recommendations */}
                 <div>
-                  <h4 className="text-sm font-semibold mb-2">优化动作</h4>
+                  <h4 className="text-sm font-semibold mb-2">优化建议（单选）</h4>
                   <div className="space-y-2">
-                    {parseActions(selectedReport.actions).map((action: any, idx: number) => (
-                      <div key={idx} className="p-3 bg-muted rounded-lg text-sm">
-                        <div className="flex items-center justify-between mb-1">
-                          <Badge variant="outline">{action.type}</Badge>
-                          <span className="font-mono text-xs">
-                            {action.from_pool} → {action.to_pool}
-                          </span>
-                        </div>
-                        <div className="text-muted-foreground">
-                          {action.namespace}/{action.pod_name}
-                        </div>
-                      </div>
-                    ))}
+                    {(() => {
+                      const recs = parseRecommendations(selectedReport.recommendations);
+                      // 找出最佳建议：节省最多（或增加最少）
+                      const bestRec = recs.length > 0 ? recs.reduce((best: Recommendation, curr: Recommendation) =>
+                        curr.est_savings > best.est_savings ? curr : best
+                      ) : null;
+
+                      const isPending = selectedReport.status === "pending";
+                      return recs.map((rec: Recommendation, idx: number) => {
+                        const isBest = rec === bestRec && recs.length > 1;
+                        const isSelected = selectedRecIndex === idx;
+                        return (
+                          <div
+                            key={idx}
+                            onClick={isPending ? () => setSelectedRecIndex(idx) : undefined}
+                            className={`p-3 rounded-lg text-sm transition-all ${
+                              isSelected
+                                ? "bg-blue-50 border-2 border-blue-500"
+                                : isBest
+                                ? "bg-green-50 border-2 border-green-300"
+                                : "bg-muted border border-border"
+                            } ${isPending ? "cursor-pointer hover:border-gray-400" : "cursor-not-allowed opacity-75"}`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                {/* Radio indicator */}
+                                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                  isSelected ? "border-blue-500 bg-blue-500" : "border-gray-400"
+                                }`}>
+                                  {isSelected && <div className="w-2 h-2 rounded-full bg-white" />}
+                                </div>
+                                <Badge variant="outline" className={
+                                  rec.action_type === "降配" ? "border-orange-500 text-orange-500" :
+                                  rec.action_type === "迁移" ? "border-blue-500 text-blue-500" :
+                                  "border-purple-500 text-purple-500"
+                                }>
+                                  {rec.action_type}
+                                </Badge>
+                                {isBest && !isSelected && (
+                                  <Badge className="bg-green-500 text-white text-xs">
+                                    推荐
+                                  </Badge>
+                                )}
+                              </div>
+                              <span className="font-mono text-xs">
+                                {rec.from_pool} → {rec.to_pool}
+                              </span>
+                            </div>
+                            <div className="text-muted-foreground mb-1">
+                              GPU: {rec.from_gpu} → {rec.to_gpu}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {rec.reason}
+                            </div>
+                            <div className="mt-2 pt-2 border-t border-border text-sm">
+                              {rec.est_savings > 0 ? (
+                                <span className="text-green-600 font-medium">
+                                  节省: ${rec.est_savings.toFixed(2)}/年
+                                </span>
+                              ) : (
+                                <span className="text-red-600 font-medium">
+                                  增加: ${Math.abs(rec.est_savings).toFixed(2)}/年
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
 
-                {/* Est Savings / Cost Increase */}
-                {selectedReport.est_savings > 0 ? (
-                  <div className="p-4 bg-green-50 rounded-lg">
-                    <div className="flex items-center gap-2 text-green-700">
-                      <TrendingDown className="h-5 w-5" />
-                      <span className="font-semibold">预期年度节省</span>
-                    </div>
-                    <div className="text-2xl font-bold text-green-700 mt-1">
-                      ${selectedReport.est_savings.toFixed(2)}
-                    </div>
+                {/* Approved Recommendation Display */}
+                {selectedReport.status === "approved" && selectedReport.approved_recommendation && (
+                  <div className="pt-4 border-t">
+                    <h4 className="text-sm font-semibold mb-2">已批准的建议</h4>
+                    {(() => {
+                      const approvedRec = parseRecommendations(`[${selectedReport.approved_recommendation}]`)[0];
+                      if (!approvedRec) return null;
+                      return (
+                        <div className="p-3 bg-green-50 border-2 border-green-500 rounded-lg text-sm">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle className="h-4 w-4 text-green-600" />
+                              <Badge variant="outline" className={
+                                approvedRec.action_type === "降配" ? "border-orange-500 text-orange-500" :
+                                approvedRec.action_type === "迁移" ? "border-blue-500 text-blue-500" :
+                                "border-purple-500 text-purple-500"
+                              }>
+                                {approvedRec.action_type}
+                              </Badge>
+                            </div>
+                            <span className="font-mono text-xs">
+                              {approvedRec.from_pool} → {approvedRec.to_pool}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground mb-1">
+                            GPU: {approvedRec.from_gpu} → {approvedRec.to_gpu}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {approvedRec.reason}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
-                ) : (
-                  <div className="p-4 bg-red-50 rounded-lg">
-                    <div className="flex items-center gap-2 text-red-700">
-                      <TrendingDown className="h-5 w-5 rotate-180" />
-                      <span className="font-semibold">预期年度增加</span>
-                    </div>
-                    <div className="text-2xl font-bold text-red-700 mt-1">
-                      ${Math.abs(selectedReport.est_savings).toFixed(2)}
+                )}
+
+                {/* Rejected Display */}
+                {selectedReport.status === "rejected" && (
+                  <div className="pt-4 border-t">
+                    <div className="p-3 bg-red-50 border-2 border-red-500 rounded-lg text-sm flex items-center gap-2">
+                      <XCircle className="h-4 w-4 text-red-600" />
+                      <span className="text-red-700">已拒绝</span>
                     </div>
                   </div>
                 )}
 
                 {/* Actions Buttons */}
                 {selectedReport.status === "pending" && (
-                  <div className="flex gap-2 pt-4 border-t">
-                    <Button
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => updateStatus(selectedReport.id, "approved")}
-                    >
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      批准执行
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      className="flex-1"
-                      onClick={() => updateStatus(selectedReport.id, "rejected")}
-                    >
-                      <XCircle className="h-4 w-4 mr-2" />
-                      拒绝
-                    </Button>
+                  <div className="flex flex-col gap-2 pt-4 border-t">
+                    {parseRecommendations(selectedReport.recommendations).length > 0 && (
+                      <div className="text-xs text-muted-foreground text-center">
+                        请在上方选择一条建议后批准执行
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1 bg-green-600 hover:bg-green-700"
+                        disabled={selectedRecIndex === null}
+                        onClick={() => updateStatus(selectedReport.id, "approved")}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        批准执行
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="flex-1"
+                        onClick={() => updateStatus(selectedReport.id, "rejected")}
+                      >
+                        <XCircle className="h-4 w-4 mr-2" />
+                        拒绝全部
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>

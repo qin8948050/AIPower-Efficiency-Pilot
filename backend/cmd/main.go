@@ -283,7 +283,7 @@ func main() {
 				req.Days = 7 // 默认 7 天
 			}
 
-			report, err := insightsAnalyzer.GenerateReport(req.PoolID, req.Days)
+			report, err := insightsAnalyzer.GenerateReport(req.Days)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -291,13 +291,14 @@ func main() {
 			c.JSON(http.StatusOK, report)
 		})
 
-		// 获取报告列表
+		// 获取报告列表（按任务/团队过滤）
 		v3.GET("/insights/reports", func(c *gin.Context) {
-			poolID := c.Query("pool_id")
+			taskName := c.Query("task_name")
+			team := c.Query("team")
 			limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 			offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-			reports, total, err := mysqlCli.GetInsightReports(poolID, limit, offset)
+			reports, total, err := mysqlCli.GetInsightReports(taskName, team, limit, offset)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -307,18 +308,21 @@ func main() {
 			var reportList []llm.InsightReport
 			for _, r := range reports {
 				reportList = append(reportList, llm.InsightReport{
-					ID:          strconv.FormatUint(uint64(r.ID), 10),
-					GeneratedAt: r.GeneratedAt,
-					TaskName:    r.TaskName,
-					Namespace:   r.Namespace,
-					Team:        r.Team,
-					PoolID:      r.PoolID,
-					ReportType:  r.ReportType,
-					Summary:     r.Summary,
-					RootCause:   r.RootCause,
-					Actions:     r.Actions,
-					EstSavings:  r.EstSavings,
-					Status:      r.Status,
+					ID:                       strconv.FormatUint(uint64(r.ID), 10),
+					GeneratedAt:              r.GeneratedAt,
+					TaskName:                 r.TaskName,
+					Namespace:                r.Namespace,
+					Team:                     r.Team,
+					PoolID:                   r.PoolID,
+					Problem:                   r.Problem,
+					ReportType:               r.ReportType,
+					Summary:                   r.Summary,
+					RootCause:                 r.RootCause,
+					Recommendations:           r.Recommendations,
+					ApprovedRecommendation:    r.ApprovedRecommendation,
+					ApprovedAt:                r.ApprovedAt,
+					EstSavings:               r.EstSavings,
+					Status:                   r.Status,
 				})
 			}
 
@@ -343,18 +347,21 @@ func main() {
 			}
 
 			c.JSON(http.StatusOK, llm.InsightReport{
-				ID:          strconv.FormatUint(uint64(report.ID), 10),
-				GeneratedAt: report.GeneratedAt,
-				TaskName:    report.TaskName,
-				Namespace:   report.Namespace,
-				Team:        report.Team,
-				PoolID:      report.PoolID,
-				ReportType:  report.ReportType,
-				Summary:     report.Summary,
-				RootCause:   report.RootCause,
-				Actions:     report.Actions,
-				EstSavings:  report.EstSavings,
-				Status:      report.Status,
+				ID:                       strconv.FormatUint(uint64(report.ID), 10),
+				GeneratedAt:              report.GeneratedAt,
+				TaskName:                 report.TaskName,
+				Namespace:                report.Namespace,
+				Team:                     report.Team,
+				PoolID:                   report.PoolID,
+				Problem:                   report.Problem,
+				ReportType:               report.ReportType,
+				Summary:                   report.Summary,
+				RootCause:                 report.RootCause,
+				Recommendations:           report.Recommendations,
+				ApprovedRecommendation:    report.ApprovedRecommendation,
+				ApprovedAt:                report.ApprovedAt,
+				EstSavings:               report.EstSavings,
+				Status:                   report.Status,
 			})
 		})
 
@@ -367,7 +374,8 @@ func main() {
 			}
 
 			var req struct {
-				Status string `json:"status"`
+				Status        string `json:"status"`
+				Recommendation string `json:"recommendation,omitempty"` // 批准时选中的建议（JSON字符串）
 			}
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -379,9 +387,23 @@ func main() {
 				return
 			}
 
+			// 批准时必须选中一条建议
+			if req.Status == "approved" && req.Recommendation == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "must select a recommendation when approving"})
+				return
+			}
+
 			if err := mysqlCli.UpdateInsightReportStatus(uint(id), req.Status); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
+			}
+
+			// 如果是批准，更新选中的建议
+			if req.Status == "approved" && req.Recommendation != "" {
+				if err := mysqlCli.UpdateInsightReportRecommendation(uint(id), req.Recommendation); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
 			}
 
 			c.JSON(http.StatusOK, gin.H{"status": "updated"})

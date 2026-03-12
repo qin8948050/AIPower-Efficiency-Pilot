@@ -37,18 +37,23 @@ const (
 
 // TaskProfile 任务画像（Pod 特征）
 type TaskProfile struct {
-	PodName          string
-	Namespace        string
-	TeamLabel        string // 负责团队
-	PoolID           string
-	SlicingMode      string
-	AvgUtil          float64
-	MaxUtil          float64
-	Jitter           float64
-	Cost             float64
-	DurationHours    float64   // 运行时长（小时）
-	Scene            TaskScene
-	RequiredFeatures string    // Pod 声明需要的特性
+	PodName        string
+	Namespace      string
+	TeamLabel      string // 负责团队
+	PoolID         string
+	SlicingMode    string
+	AvgUtil        float64
+	MaxUtil        float64
+	Jitter         float64
+	Cost           float64
+	DurationHours float64   // 运行时长（小时）
+	Scene          TaskScene
+
+	// 新增字段
+	TaskType     TaskType   // 任务类型: training, inference, dev
+	Priority     Priority   // 优先级: high, medium, low
+	HardwareDeps []string  // 硬件依赖: nvlink, fp8, mig, rdma
+	GPUCount     int       // GPU 数量
 }
 
 // PoolProfile 资源池画像
@@ -63,12 +68,12 @@ type PoolProfile struct {
 
 // MismatchResult 任务场景与资源池不匹配结果
 type MismatchResult struct {
-	Task          TaskProfile
-	CurrentPool   PoolProfile
-	SuggestedPool string
-	Reason        string
-	ReportType    string // "downgrade", "upgrade", "isolation", "feature_mismatch"
-	EstSavings    float64
+	Task            TaskProfile
+	CurrentPool     PoolProfile
+	Problem         string            // 问题描述: "利用率低", "抖动高"
+	ReportType      string            // "downgrade", "isolation"
+	Recommendations []Recommendation  // 治理建议列表（1-2条）
+	EstSavings     float64          // 默认选择第一条的预估节省
 }
 
 // Summarizer 数据脱水降维器
@@ -227,67 +232,232 @@ func (s *Summarizer) identifyTaskScene(trace *LifeTrace) TaskScene {
 	return SceneUnknown
 }
 
+// identifyTaskProfile 识别任务画像
+// 根据 namespace, team, annotation 等推断任务类型、优先级、硬件依赖
+func (s *Summarizer) identifyTaskProfile(trace *LifeTrace) TaskProfile {
+	ns := strings.ToLower(trace.Namespace)
+	team := strings.ToLower(trace.TeamLabel)
+
+	// 1. 识别任务类型
+	taskType := TaskTypeDev
+	if strings.Contains(ns, "train") {
+		taskType = TaskTypeTraining
+	} else if strings.Contains(ns, "infer") {
+		taskType = TaskTypeInference
+	}
+
+	// 2. 识别优先级
+	priority := PriorityMedium
+	if strings.Contains(team, "core") || strings.Contains(team, "prod") || strings.Contains(team, "primary") {
+		priority = PriorityHigh
+	} else if strings.Contains(team, "infra") || strings.Contains(team, "platform") {
+		priority = PriorityMedium
+	} else if strings.Contains(team, "dev") || strings.Contains(team, "test") || strings.Contains(team, "lab") {
+		priority = PriorityLow
+	}
+
+	// 3. 识别硬件依赖（从 RequiredFeatures 或 Annotation 中获取）
+	hardwareDeps := parseHardwareDeps(trace.RequiredFeatures)
+
+	// 4. GPU 数量（从资源申请中估算，暂定 1）
+	gpuCount := 1
+	// TODO: 从 resources.limits 中提取 GPU 数量
+
+	return TaskProfile{
+		PodName:        trace.PodName,
+		Namespace:      trace.Namespace,
+		TeamLabel:      trace.TeamLabel,
+		PoolID:         trace.PoolID,
+		SlicingMode:    trace.SlicingMode,
+		AvgUtil:        trace.GPUUtilAvg,
+		MaxUtil:        trace.GPUUtilMax,
+		Jitter:         trace.GPUUtilMax - trace.GPUUtilAvg,
+		Cost:           trace.CostAmount,
+		Scene:          s.identifyTaskScene(trace),
+		TaskType:       taskType,
+		Priority:       priority,
+		HardwareDeps:   hardwareDeps,
+		GPUCount:       gpuCount,
+	}
+}
+
+// parseHardwareDeps 解析硬件依赖
+func parseHardwareDeps(features string) []string {
+	if features == "" {
+		return nil
+	}
+	featuresLower := strings.ToLower(features)
+	var deps []string
+	if strings.Contains(featuresLower, "nvlink") {
+		deps = append(deps, string(HardwareDepNVLink))
+	}
+	if strings.Contains(featuresLower, "fp8") {
+		deps = append(deps, string(HardwareDepFP8))
+	}
+	if strings.Contains(featuresLower, "mig") {
+		deps = append(deps, string(HardwareDepMIG))
+	}
+	if strings.Contains(featuresLower, "rdma") {
+		deps = append(deps, string(HardwareDepRDMA))
+	}
+	return deps
+}
+
+// hasHardwareDeps 检查是否有硬件依赖
+func hasHardwareDeps(deps []string) bool {
+	return len(deps) > 0
+}
+
 // checkMismatch 检查任务在当前资源池是否高效
-// 核心原则：高效、不浪费
-// 1. 降级: Full/MIG 池 + 利用率 < 30% → 降级到 MPS/TS
-// 2. 隔离: MPS/TS 池 + Jitter > 15% → 升级到 MIG
-// 3. 特性纠偏: 高端特性池 + 利用率 < 10% → 回退到通用池
+// 根据决策流程生成 1-2 条治理建议
 func (s *Summarizer) checkMismatch(trace *LifeTrace, pool *PoolProfile) *MismatchResult {
-	var suggestedPool string
-	var reason string
-	var reportType string
-	var estSavings float64
+	// 1. 识别任务画像
+	taskProfile := s.identifyTaskProfile(trace)
 
 	// 计算抖动
 	jitter := trace.GPUUtilMax - trace.GPUUtilAvg
 
-	// 算法1: 降级迁移 - Full/MIG 池 + 利用率 < 30%
+	var recommendations []Recommendation
+	var problem string
+	var reportType string
+
+	// 决策流程：根据问题类型生成建议
+
+	// === 利用率低场景 ===
 	if isFullOrMIGPool(pool.SlicingMode) && trace.GPUUtilAvg < LowUtilThreshold {
-		suggestedPool = findDowngradePool(pool.PoolID)
+		problem = "利用率低"
 		reportType = "downgrade"
-		reason = fmt.Sprintf("任务在 %s 池利用率仅 %.1f%%，资源浪费严重，建议迁移至 %s",
-			pool.SlicingMode, trace.GPUUtilAvg, suggestedPool)
-		estSavings = trace.CostAmount * (1 - trace.GPUUtilAvg/100)
+
+		// 决策：
+		// 1. 有硬件依赖 / High优先级 → 只降配
+		// 2. 无硬件依赖 + Low优先级 → 降配+迁移
+		// 3. Medium优先级 → 降配 + 降配+迁移（二选一）
+
+		if hasHardwareDeps(taskProfile.HardwareDeps) || taskProfile.Priority == PriorityHigh {
+			// 只降配
+			rec := generateDowngradeRec(trace, pool, taskProfile)
+			recommendations = append(recommendations, rec)
+		} else if taskProfile.Priority == PriorityLow {
+			// 降配+迁移到TS池
+			rec := generateDowngradeMigrateRec(trace, pool, taskProfile)
+			recommendations = append(recommendations, rec)
+		} else {
+			// Medium: 给出两种选择
+			rec1 := generateDowngradeRec(trace, pool, taskProfile)
+			rec2 := generateDowngradeMigrateRec(trace, pool, taskProfile)
+			recommendations = append(recommendations, rec1, rec2)
+		}
 	}
 
-	// 算法2: 稳定性升级 - MPS/TS 池 + Jitter > 15%
+	// === 抖动高场景 ===
 	if isMPSOrTSPool(pool.SlicingMode) && jitter > HighJitterThreshold {
-		suggestedPool = findMIGPool()
+		problem = "抖动高"
 		reportType = "isolation"
-		reason = fmt.Sprintf("任务在 %s 池抖动达 %.1f%%(>15%%)，受邻居干扰严重，建议迁移至 MIG 硬隔离池",
-			pool.SlicingMode, jitter)
-		estSavings = trace.CostAmount * 0.3
+
+		// 决策：
+		// 1. 无硬件依赖 → 迁移到MIG池
+		// 2. Medium优先级 → 迁移 + 降配+迁移
+
+		if !hasHardwareDeps(taskProfile.HardwareDeps) {
+			rec := generateMigrateRec(trace, pool, taskProfile)
+			recommendations = append(recommendations, rec)
+		} else if taskProfile.Priority == PriorityMedium {
+			rec1 := generateMigrateRec(trace, pool, taskProfile)
+			rec2 := generateDowngradeMigrateRec(trace, pool, taskProfile)
+			recommendations = append(recommendations, rec1, rec2)
+		}
+		// High优先级 + 有硬件依赖：暂不生成建议（需要保持稳定）
 	}
 
-	// 算法3: 特性纠偏 - Pod 声明需要某特性，但资源池不提供
-	// 需要在 Analyzer 中调用 LLM 判断，暂时保留简单逻辑
-	// 实际实现会在 callLLM 时传入 Pod 声明的特性和资源池特性进行语义匹配
-
-	// 如果有不匹配结果
-	if suggestedPool != "" {
+	// 如果有建议，返回结果
+	if len(recommendations) > 0 {
+		estSavings := recommendations[0].EstSavings
 		return &MismatchResult{
-			Task: TaskProfile{
-				PodName:       trace.PodName,
-				Namespace:     trace.Namespace,
-				TeamLabel:     trace.TeamLabel,
-				PoolID:        trace.PoolID,
-				SlicingMode:   trace.SlicingMode,
-				AvgUtil:       trace.GPUUtilAvg,
-				MaxUtil:       trace.GPUUtilMax,
-				Jitter:        jitter,
-				Cost:          trace.CostAmount,
-				DurationHours: 0,
-				Scene:         SceneUnknown,
-			},
-			CurrentPool:   *pool,
-			SuggestedPool: suggestedPool,
-			Reason:        reason,
-			ReportType:    reportType,
-			EstSavings:    estSavings,
+			Task:        taskProfile,
+			CurrentPool: *pool,
+			Problem:     problem,
+			ReportType:  reportType,
+			Recommendations: recommendations,
+			EstSavings: estSavings,
 		}
 	}
 
 	return nil
+}
+
+// generateDowngradeRec 生成降配建议
+func generateDowngradeRec(trace *LifeTrace, pool *PoolProfile, profile TaskProfile) Recommendation {
+	toGPU := calculateTargetGPU(profile.GPUCount, trace.GPUUtilAvg)
+	estSavings := trace.CostAmount * (1 - float64(toGPU)/float64(profile.GPUCount)) * 52 * 0.7 // 年化估算
+
+	reason := "保留当前资源池特性"
+	if hasHardwareDeps(profile.HardwareDeps) {
+		reason = fmt.Sprintf("保留 %s 特性", strings.Join(profile.HardwareDeps, "/"))
+	}
+	if profile.Priority == PriorityHigh {
+		reason = "高优先级任务，保守处理"
+	}
+
+	return Recommendation{
+		ActionType: string(ActionTypeDowngrade),
+		FromGPU:    profile.GPUCount,
+		ToGPU:      toGPU,
+		FromPool:   pool.PoolID,
+		ToPool:     pool.PoolID,
+		EstSavings: estSavings,
+		Reason:     reason,
+	}
+}
+
+// generateMigrateRec 生成迁移建议
+func generateMigrateRec(trace *LifeTrace, pool *PoolProfile, profile TaskProfile) Recommendation {
+	targetPool := findMIGPool()
+	// 迁移到MIG池通常费用增加
+	estSavings := -trace.CostAmount * 0.3 * 52 * 0.5 // 负数表示增加
+
+	return Recommendation{
+		ActionType: string(ActionTypeMigrate),
+		FromGPU:    profile.GPUCount,
+		ToGPU:      profile.GPUCount,
+		FromPool:   pool.PoolID,
+		ToPool:     targetPool,
+		EstSavings: estSavings,
+		Reason:     "迁移到MIG硬隔离池，解决抖动问题",
+	}
+}
+
+// generateDowngradeMigrateRec 生成降配+迁移建议
+func generateDowngradeMigrateRec(trace *LifeTrace, pool *PoolProfile, profile TaskProfile) Recommendation {
+	toGPU := calculateTargetGPU(profile.GPUCount, trace.GPUUtilAvg)
+	targetPool := findDowngradePool(pool.PoolID)
+
+	// 降配 + 迁移到低成本池，节省更多
+	wasteRatio := 1 - trace.GPUUtilAvg/100
+	estSavings := trace.CostAmount * wasteRatio * 52 * 0.7
+
+	return Recommendation{
+		ActionType: string(ActionTypeDowngradeMigrate),
+		FromGPU:    profile.GPUCount,
+		ToGPU:      toGPU,
+		FromPool:   pool.PoolID,
+		ToPool:     targetPool,
+		EstSavings: estSavings,
+		Reason:     "降配并迁移到低成本资源池，节省更多",
+	}
+}
+
+// calculateTargetGPU 计算目标GPU数量
+func calculateTargetGPU(currentGPU int, util float64) int {
+	if util < 10 {
+		return max(1, currentGPU/4)
+	}
+	if util < 20 {
+		return max(1, currentGPU/2)
+	}
+	if util < 30 {
+		return max(1, currentGPU*3/4)
+	}
+	return currentGPU
 }
 
 // findPoolByScene 根据场景名称查找资源池

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -30,25 +29,25 @@ func NewAnalyzer(mysqlCli *storage.MySQLClient, cfg *config.LLMConfig) *Analyzer
 }
 
 // GenerateReport 生成诊断报告
-func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, error) {
+func (a *Analyzer) GenerateReport(days int) (*InsightReport, error) {
 	// 核心算法：分析任务场景与资源池的匹配关系
 	mismatches, err := a.summarizer.AnalyzeTaskPoolMismatch(days)
-	fmt.Printf("mismatches:%v\n",mismatches)
+	fmt.Printf("mismatches count: %d\n", len(mismatches))
 	if err != nil {
 		return nil, err
 	}
 
 	if len(mismatches) == 0 {
 		return &InsightReport{
-			ID:          "0",
-			GeneratedAt: time.Now(),
-			PoolID:     poolID,
-			ReportType: "general",
-			Summary:    "所有任务与资源池匹配良好，未发现需要优化的场景。",
-			RootCause:  "任务场景与资源池匹配合理，利用率正常。",
-			Actions:    "[]",
-			EstSavings: 0,
-			Status:     "pending",
+			ID:             "0",
+			GeneratedAt:    time.Now(),
+			Problem:        "无",
+			ReportType:     "general",
+			Summary:        "所有任务与资源池匹配良好，未发现需要优化的场景。",
+			RootCause:      "任务场景与资源池匹配合理，利用率正常。",
+			Recommendations: "[]",
+			EstSavings:     0,
+			Status:         "pending",
 		}, nil
 	}
 
@@ -60,66 +59,28 @@ func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, erro
 		}
 	}
 
-	// 构建 InsightSummary 供 LLM 使用
-	summary := &InsightSummary{
-		PoolID:           selectedMismatch.CurrentPool.PoolID,
-		TimeRange:        fmt.Sprintf("%dd", days),
-		HardwareFeatures:  selectedMismatch.CurrentPool.HardwareFeatures,
-		SlicingMode:      selectedMismatch.CurrentPool.SlicingMode,
-		AvgUtilization:   selectedMismatch.Task.AvgUtil,
-		MaxUtilization:   selectedMismatch.Task.MaxUtil,
-		CostTotal:        selectedMismatch.Task.Cost,
-		WasteCost:        selectedMismatch.EstSavings,
-	}
+	// 直接使用 summarizer 生成的建议
+	// 将 Recommendations 序列化为 JSON
+	recsJSON, _ := json.Marshal(selectedMismatch.Recommendations)
 
-	// 添加对应的 Pod 列表
-	switch selectedMismatch.ReportType {
-	case "downgrade":
-		summary.LowUtilPods = []LowUtilPod{{
-			PodName:      selectedMismatch.Task.PodName,
-			Namespace:    selectedMismatch.Task.Namespace,
-			AvgUtil:      selectedMismatch.Task.AvgUtil,
-			EstWasteCost: selectedMismatch.EstSavings,
-		}}
-	case "isolation":
-		summary.HighJitterPods = []JitterPod{{
-			PodName:   selectedMismatch.Task.PodName,
-			Namespace: selectedMismatch.Task.Namespace,
-			JitterPct: selectedMismatch.Task.Jitter,
-		}}
-	case "feature_mismatch":
-		summary.FeatureMismatchPods = []FeatureMismatchPod{{
-			PodName:          selectedMismatch.Task.PodName,
-			Namespace:        selectedMismatch.Task.Namespace,
-			RequiredFeatures: selectedMismatch.Task.RequiredFeatures,
-			AvgUtil:          selectedMismatch.Task.AvgUtil,
-			EstWasteCost:     selectedMismatch.EstSavings,
-		}}
-	}
+	// 构建摘要和根因
+	summary := buildSummaryFromMismatch(&selectedMismatch)
+	rootCause := buildRootCauseFromMismatch(&selectedMismatch)
 
-	// 2. 确定报告类型
-	reportType := selectedMismatch.ReportType
-
-	// 3. 调用 LLM 生成诊断建议
-	llmResponse, err := a.callLLM(summary)
-	if err != nil {
-		log.Printf("[Analyzer] LLM call failed, using fallback: %v", err)
-		llmResponse = a.fallbackAnalysisForMismatch(&selectedMismatch)
-	}
-	fmt.Print(llmResponse)
-	// 4. 保存报告（核心对象是任务，而非资源池）
+	// 保存报告
 	report := &storage.InsightReport{
-		GeneratedAt: time.Now(),
-		TaskName:    selectedMismatch.Task.PodName,     // 任务名
-		Namespace:   selectedMismatch.Task.Namespace,    // 命名空间
-		Team:        selectedMismatch.Task.TeamLabel,   // 负责团队
-		PoolID:      selectedMismatch.CurrentPool.PoolID, // 当前所在资源池
-		ReportType:  reportType,
-		Summary:     llmResponse.Summary,
-		RootCause:   llmResponse.RootCause,
-		Actions:     llmResponse.ActionsJSON,
-		EstSavings:  calculateEstSavingsForMismatch(&selectedMismatch),
-		Status:      "pending",
+		GeneratedAt:    time.Now(),
+		TaskName:       selectedMismatch.Task.PodName,
+		Namespace:      selectedMismatch.Task.Namespace,
+		Team:           selectedMismatch.Task.TeamLabel,
+		PoolID:         selectedMismatch.CurrentPool.PoolID,
+		Problem:        selectedMismatch.Problem,
+		ReportType:     selectedMismatch.ReportType,
+		Summary:        summary,
+		RootCause:      rootCause,
+		Recommendations: string(recsJSON),
+		EstSavings:     selectedMismatch.EstSavings,
+		Status:         "pending",
 	}
 
 	if err := a.mysqlCli.SaveInsightReport(report); err != nil {
@@ -128,19 +89,63 @@ func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, erro
 
 	// 转换返回类型
 	return &InsightReport{
-		ID:          fmt.Sprintf("%d", report.ID),
-		GeneratedAt: report.GeneratedAt,
-		TaskName:    report.TaskName,
-		Namespace:   report.Namespace,
-		Team:        report.Team,
-		PoolID:      report.PoolID,
-		ReportType:  report.ReportType,
-		Summary:     report.Summary,
-		RootCause:   report.RootCause,
-		Actions:     report.Actions,
-		EstSavings:  report.EstSavings,
-		Status:      report.Status,
+		ID:             fmt.Sprintf("%d", report.ID),
+		GeneratedAt:    report.GeneratedAt,
+		TaskName:       report.TaskName,
+		Namespace:      report.Namespace,
+		Team:           report.Team,
+		PoolID:         report.PoolID,
+		Problem:        report.Problem,
+		ReportType:     report.ReportType,
+		Summary:        report.Summary,
+		RootCause:      report.RootCause,
+		Recommendations: report.Recommendations,
+		EstSavings:     report.EstSavings,
+		Status:         report.Status,
 	}, nil
+}
+
+// buildSummaryFromMismatch 根据 mismatch 构建摘要
+func buildSummaryFromMismatch(m *MismatchResult) string {
+	problem := m.Problem
+	util := m.Task.AvgUtil
+	jitter := m.Task.Jitter
+	pool := m.CurrentPool.PoolID
+
+	if problem == "利用率低" {
+		return fmt.Sprintf("任务 [%s] 在 %s 池利用率为 %.1f%%，存在资源浪费问题。",
+			m.Task.PodName, pool, util)
+	}
+	if problem == "抖动高" {
+		return fmt.Sprintf("任务 [%s] 在 %s 池抖动达 %.1f%%，受邻居干扰严重。",
+			m.Task.PodName, pool, jitter)
+	}
+	return fmt.Sprintf("任务 [%s] 存在优化空间。", m.Task.PodName)
+}
+
+// buildRootCauseFromMismatch 根据 mismatch 构建根因
+func buildRootCauseFromMismatch(m *MismatchResult) string {
+	problem := m.Problem
+	priority := m.Task.Priority
+	hasDeps := hasHardwareDeps(m.Task.HardwareDeps)
+
+	if problem == "利用率低" {
+		if hasDeps {
+			return fmt.Sprintf("任务声明需要 %s 特性，但利用率仅 %.1f%%，可考虑降配保留特性。",
+				strings.Join(m.Task.HardwareDeps, "/"), m.Task.AvgUtil)
+		}
+		if priority == "high" {
+			return fmt.Sprintf("高优先级任务，利用率 %.1f%%，建议只降配不迁移。", m.Task.AvgUtil)
+		}
+		return fmt.Sprintf("任务利用率 %.1f%% 低于阈值，可迁移到低成本池或降配。", m.Task.AvgUtil)
+	}
+	if problem == "抖动高" {
+		if hasDeps {
+			return "任务有硬件依赖，为保障稳定性建议只调整资源配额。"
+		}
+		return fmt.Sprintf("任务抖动 %.1f%% 超过阈值，建议迁移到 MIG 硬隔离池。", m.Task.Jitter)
+	}
+	return "任务与资源池匹配存在问题。"
 }
 
 // selectPriorityPool 选择优先处理的资源池
@@ -341,54 +346,6 @@ func parseLLMResponse(content string) (*LLMResponse, error) {
 	return response, nil
 }
 
-// fallbackAnalysis 回退分析（当 LLM 不可用时）
-// 根据报告类型生成对应的迁移建议
-func (a *Analyzer) fallbackAnalysis(summary *InsightSummary, reportType string) *LLMResponse {
-	var actions []InsightAction
-
-	switch reportType {
-	case "downgrade":
-		// 降级迁移: Full/MIG 池 → MPS/TS 池
-		actions = generateDowngradeActions(summary)
-	case "isolation":
-		// 稳定性升级: MPS/TS 池 → MIG 池
-		actions = generateIsolationActions(summary)
-	case "feature_mismatch":
-		// 特性纠偏: 高端池 → 通用池
-		actions = generateFeatureMismatchActions(summary)
-	default:
-		// general: 无特殊建议
-	}
-
-	actionsJSON, _ := json.Marshal(actions)
-
-	summaryText := buildSummaryText(summary, reportType)
-	rootCause := buildRootCause(summary, reportType)
-
-	return &LLMResponse{
-		Summary:     summaryText,
-		RootCause:   rootCause,
-		ActionsJSON: string(actionsJSON),
-	}
-}
-
-// fallbackAnalysisForMismatch 回退分析（基于 MismatchResult）
-func (a *Analyzer) fallbackAnalysisForMismatch(mismatch *MismatchResult) *LLMResponse {
-	action := InsightAction{
-		Type:      "migrate",
-		PodName:   mismatch.Task.PodName,
-		Namespace: mismatch.Task.Namespace,
-		FromPool:  mismatch.CurrentPool.PoolID,
-		ToPool:    mismatch.SuggestedPool,
-	}
-	actionsJSON, _ := json.Marshal([]InsightAction{action})
-
-	return &LLMResponse{
-		Summary:     mismatch.Reason,
-		RootCause:   mismatch.Reason,
-		ActionsJSON: string(actionsJSON),
-	}
-}
 
 // generateDowngradeActions 生成降级迁移建议
 // Full/MIG 池利用率 < 30% → 迁移至 MPS/TS 池
