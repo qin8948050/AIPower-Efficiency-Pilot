@@ -260,7 +260,7 @@ export default function InsightsPage() {
             <DollarSign className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">${totalSavings.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-green-600">¥{totalSavings.toFixed(2)}</div>
             <p className="text-xs text-muted-foreground mt-1">预期成本节省</p>
           </CardContent>
         </Card>
@@ -317,14 +317,14 @@ export default function InsightsPage() {
                         <>
                           <span className="text-muted-foreground">预计节省: </span>
                           <span className="font-semibold text-green-600">
-                            ${report.est_savings.toFixed(2)}/年
+                            ¥{report.est_savings.toFixed(2)}/年
                           </span>
                         </>
                       ) : (
                         <>
                           <span className="text-muted-foreground">预计增加: </span>
                           <span className="font-semibold text-red-600">
-                            ${Math.abs(report.est_savings).toFixed(2)}/年
+                            ¥{Math.abs(report.est_savings).toFixed(2)}/年
                           </span>
                         </>
                       )}
@@ -435,11 +435,11 @@ export default function InsightsPage() {
                             <div className="mt-2 pt-2 border-t border-border text-sm">
                               {rec.est_savings > 0 ? (
                                 <span className="text-green-600 font-medium">
-                                  节省: ${rec.est_savings.toFixed(2)}/年
+                                  节省: ¥{rec.est_savings.toFixed(2)}/年
                                 </span>
                               ) : (
                                 <span className="text-red-600 font-medium">
-                                  增加: ${Math.abs(rec.est_savings).toFixed(2)}/年
+                                  增加: ¥{Math.abs(rec.est_savings).toFixed(2)}/年
                                 </span>
                               )}
                             </div>
