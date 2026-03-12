@@ -107,15 +107,18 @@ func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, erro
 		llmResponse = a.fallbackAnalysisForMismatch(&selectedMismatch)
 	}
 	fmt.Print(llmResponse)
-	// 4. 保存报告
+	// 4. 保存报告（核心对象是任务，而非资源池）
 	report := &storage.InsightReport{
 		GeneratedAt: time.Now(),
-		PoolID:      summary.PoolID,
+		TaskName:    selectedMismatch.Task.PodName,     // 任务名
+		Namespace:   selectedMismatch.Task.Namespace,    // 命名空间
+		Team:        selectedMismatch.Task.TeamLabel,   // 负责团队
+		PoolID:      selectedMismatch.CurrentPool.PoolID, // 当前所在资源池
 		ReportType:  reportType,
 		Summary:     llmResponse.Summary,
 		RootCause:   llmResponse.RootCause,
 		Actions:     llmResponse.ActionsJSON,
-		EstSavings:  calculateEstSavings(summary),
+		EstSavings:  calculateEstSavingsForMismatch(&selectedMismatch),
 		Status:      "pending",
 	}
 
@@ -127,6 +130,9 @@ func (a *Analyzer) GenerateReport(poolID string, days int) (*InsightReport, erro
 	return &InsightReport{
 		ID:          fmt.Sprintf("%d", report.ID),
 		GeneratedAt: report.GeneratedAt,
+		TaskName:    report.TaskName,
+		Namespace:   report.Namespace,
+		Team:        report.Team,
 		PoolID:      report.PoolID,
 		ReportType:  report.ReportType,
 		Summary:     report.Summary,
@@ -556,6 +562,26 @@ func calculateEstSavings(summary *InsightSummary) float64 {
 	}
 	// 假设可以回收 70% 的浪费成本
 	return summary.WasteCost * (365.0 / days) * 0.7
+}
+
+// calculateEstSavingsForMismatch 计算任务不匹配的预期节省/费用增加
+// - downgrade/feature_mismatch: 节省（负数表示增加）
+// - isolation: 增加费用（返回负数）
+func calculateEstSavingsForMismatch(mismatch *MismatchResult) float64 {
+	// 简化：年度值 = 任务成本 * 365 * 系数
+	days := 7.0
+	yearFactor := 365.0 / days
+
+	switch mismatch.ReportType {
+	case "downgrade", "feature_mismatch":
+		// 降级迁移：节省费用
+		return mismatch.EstSavings * yearFactor * 0.7
+	case "isolation":
+		// 稳定性升级：费用增加（返回负数）
+		return -mismatch.EstSavings * yearFactor * 0.5
+	default:
+		return 0
+	}
 }
 
 // buildPrompt 构建诊断 Prompt

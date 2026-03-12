@@ -39,6 +39,7 @@ const (
 type TaskProfile struct {
 	PodName          string
 	Namespace        string
+	TeamLabel        string // 负责团队
 	PoolID           string
 	SlicingMode      string
 	AvgUtil          float64
@@ -268,6 +269,7 @@ func (s *Summarizer) checkMismatch(trace *LifeTrace, pool *PoolProfile) *Mismatc
 			Task: TaskProfile{
 				PodName:       trace.PodName,
 				Namespace:     trace.Namespace,
+				TeamLabel:     trace.TeamLabel,
 				PoolID:        trace.PoolID,
 				SlicingMode:   trace.SlicingMode,
 				AvgUtil:       trace.GPUUtilAvg,

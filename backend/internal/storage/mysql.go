@@ -343,10 +343,14 @@ func (m *MySQLClient) GetResourcePool(poolID string) (*ResourcePool, error) {
 }
 
 // InsightReport AI 诊断报告模型
+// 核心对象是任务（Pod/PyTorchJob），而非资源池
 type InsightReport struct {
 	ID          uint      `gorm:"primaryKey"`
 	GeneratedAt time.Time `gorm:"column:generated_at"`
-	PoolID      string    `gorm:"column:pool_id;index"`
+	TaskName    string    `gorm:"column:task_name;index"`    // 任务名
+	Namespace   string    `gorm:"column:namespace"`           // 命名空间
+	Team        string    `gorm:"column:team"`                // 负责团队
+	PoolID      string    `gorm:"column:pool_id;index"`      // 当前所在资源池
 	ReportType  string    `gorm:"column:report_type"`
 	Summary     string    `gorm:"column:summary;type:text"`
 	RootCause   string    `gorm:"column:root_cause;type:text"`

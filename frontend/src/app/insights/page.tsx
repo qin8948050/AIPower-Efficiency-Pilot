@@ -25,7 +25,10 @@ import {
 interface InsightReport {
   id: string;
   generated_at: string;
-  pool_id: string;
+  task_name: string;   // 任务名（Pod/PyTorchJob）
+  namespace: string;   // 命名空间
+  team: string;        // 负责团队
+  pool_id: string;    // 当前所在资源池
   report_type: string;
   summary: string;
   root_cause: string;
@@ -148,6 +151,27 @@ export default function InsightsPage() {
     }
   };
 
+  // 从 Actions 中提取任务名（Pod 名称）
+  const extractTaskName = (actionsStr: string): string => {
+    const actions = parseActions(actionsStr);
+    if (actions.length > 0 && actions[0].pod_name) {
+      // 提取任务前缀（如 pytorchjob-cv-train）而不是完整的 worker 名称
+      const podName = actions[0].pod_name;
+      const prefix = podName.split('-worker-')[0];
+      return prefix;
+    }
+    return "";
+  };
+
+  // 从 Actions 中提取命名空间
+  const extractNamespace = (actionsStr: string): string => {
+    const actions = parseActions(actionsStr);
+    if (actions.length > 0 && actions[0].namespace) {
+      return actions[0].namespace;
+    }
+    return "";
+  };
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleString("zh-CN", {
       year: "numeric",
@@ -260,15 +284,31 @@ export default function InsightsPage() {
                         {formatDate(report.generated_at)}
                       </span>
                     </div>
-                    <div className="font-medium">{report.pool_id}</div>
+                    <div className="font-medium">
+                      {report.task_name || report.pool_id}
+                      <span className="text-muted-foreground font-normal text-sm ml-2">
+                        {report.namespace && `(${report.namespace})`}
+                      </span>
+                    </div>
                     <div className="text-sm text-muted-foreground line-clamp-1 mt-1">
                       {report.summary}
                     </div>
                     <div className="text-sm mt-2">
-                      <span className="text-muted-foreground">预计节省: </span>
-                      <span className="font-semibold text-green-600">
-                        ${report.est_savings.toFixed(2)}/年
-                      </span>
+                      {report.est_savings > 0 ? (
+                        <>
+                          <span className="text-muted-foreground">预计节省: </span>
+                          <span className="font-semibold text-green-600">
+                            ${report.est_savings.toFixed(2)}/年
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground">预计增加: </span>
+                          <span className="font-semibold text-red-600">
+                            ${Math.abs(report.est_savings).toFixed(2)}/年
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -283,7 +323,7 @@ export default function InsightsPage() {
             <CardTitle>报告详情</CardTitle>
             {selectedReport && (
               <CardDescription className="text-sm">
-                资源池: {selectedReport.pool_id} | 类型: {selectedReport.report_type}
+                任务: {selectedReport.task_name || "未知"} ({selectedReport.namespace}) | 团队: {selectedReport.team || "未知"} | 资源池: {selectedReport.pool_id}
               </CardDescription>
             )}
           </CardHeader>
@@ -327,16 +367,28 @@ export default function InsightsPage() {
                   </div>
                 </div>
 
-                {/* Est Savings */}
-                <div className="p-4 bg-green-50 rounded-lg">
-                  <div className="flex items-center gap-2 text-green-700">
-                    <TrendingDown className="h-5 w-5" />
-                    <span className="font-semibold">预期年度节省</span>
+                {/* Est Savings / Cost Increase */}
+                {selectedReport.est_savings > 0 ? (
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <TrendingDown className="h-5 w-5" />
+                      <span className="font-semibold">预期年度节省</span>
+                    </div>
+                    <div className="text-2xl font-bold text-green-700 mt-1">
+                      ${selectedReport.est_savings.toFixed(2)}
+                    </div>
                   </div>
-                  <div className="text-2xl font-bold text-green-700 mt-1">
-                    ${selectedReport.est_savings.toFixed(2)}
+                ) : (
+                  <div className="p-4 bg-red-50 rounded-lg">
+                    <div className="flex items-center gap-2 text-red-700">
+                      <TrendingDown className="h-5 w-5 rotate-180" />
+                      <span className="font-semibold">预期年度增加</span>
+                    </div>
+                    <div className="text-2xl font-bold text-red-700 mt-1">
+                      ${Math.abs(selectedReport.est_savings).toFixed(2)}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Actions Buttons */}
                 {selectedReport.status === "pending" && (

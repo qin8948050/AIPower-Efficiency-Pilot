@@ -11,6 +11,22 @@ import (
 	"github.com/qxw/aipower-efficiency-pilot/internal/types"
 )
 
+// 根据资源池获取对应的切片模式
+func getSlicingModeForPool(poolID string, modes []types.SlicingMode) string {
+	switch poolID {
+	case "Train-H800-Full-Pool", "Train-A100-Full-Pool":
+		return string(types.SlicingModeFull)
+	case "Infer-A100-MIG-Pool":
+		return string(types.SlicingModeMIG)
+	case "Infer-L4-MPS-Pool":
+		return string(types.SlicingModeMPS)
+	case "Dev-T4-TS-Pool":
+		return string(types.SlicingModeTS)
+	default:
+		return string(modes[0])
+	}
+}
+
 func main() {
 	// 1. 加载配置
 	cfg, err := config.LoadConfig("configs/config.yaml")
@@ -37,6 +53,7 @@ func main() {
 	mysqlClient.RawExec("TRUNCATE TABLE daily_billing_snapshot")
 	mysqlClient.RawExec("TRUNCATE TABLE resource_pool")
 	mysqlClient.RawExec("TRUNCATE TABLE insight_reports")
+		mysqlClient.RawExec("TRUNCATE TABLE life_trace")
 	redisClient.FlushDB()
 
 	// 2.6 注入定价配置 (Phase 2 核心)
@@ -74,6 +91,29 @@ func main() {
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
+	// 3.1 定义任务（Pod/PyTorchJob）与资源池的不匹配关系
+	// 任务场景 (namespace + team + pod前缀) → 当前调度的资源池 → 合适的资源池 → 不匹配原因
+	type TaskPoolMismatch struct {
+		Namespace   string  // Pod 所在 namespace
+		Team        string  // 负责团队
+		PodPrefix   string  // Pod 名称前缀（代表某个任务/PyTorchJob）
+		CurrentPool string  // 当前调度到的池（可能是错的）
+		TargetPool  string  // 建议迁移到的池
+		Reason      string  // 不匹配原因
+		AvgUtil     float64 // 平均利用率
+		Jitter      float64 // 抖动率（-1表示不适用）
+	}
+	taskMismatches := []TaskPoolMismatch{
+		// 场景1: CV-Team 的研发测试任务被调度到了昂贵的训练池（应该用 TS 池）
+		{Namespace: "ai-platform", Team: "CV-Team", PodPrefix: "pytorchjob-cv-train", CurrentPool: "Train-A100-Full-Pool", TargetPool: "Dev-T4-TS-Pool", Reason: "研发测试任务不需要NVLink，应使用低成本TS池", AvgUtil: 18.5, Jitter: -1},
+		// 场景2: Search-Algo 的推理任务被调度到了TS池，抖动过大（应该用 MPS 池）
+		{Namespace: "inference-prod", Team: "Search-Algo", PodPrefix: "pytorchjob-search-serving", CurrentPool: "Dev-T4-TS-Pool", TargetPool: "Infer-L4-MPS-Pool", Reason: "推理服务对延迟敏感，TS池抖动过大", AvgUtil: 45.0, Jitter: 22.5},
+		// 场景3: NLP-Group 的训练任务使用了H800 NVLink但利用率很低（应该降级到A100）
+		{Namespace: "data-science", Team: "NLP-Group", PodPrefix: "pytorchjob-nlp-sft", CurrentPool: "Train-H800-Full-Pool", TargetPool: "Train-A100-Full-Pool", Reason: "训练任务无需NVLink/FP8高端特性，利用率低造成浪费", AvgUtil: 12.0, Jitter: -1},
+		// 场景4: Inference-prod 的批量推理任务被调度到了 MIG 池（应该用 MPS 池）
+		{Namespace: "inference-prod", Team: "CV-Team", PodPrefix: "pytorchjob-cv-batch-infer", CurrentPool: "Infer-A100-MIG-Pool", TargetPool: "Infer-L4-MPS-Pool", Reason: "批量推理吞吐量优先，MPS更经济", AvgUtil: 35.0, Jitter: -1},
+	}
+
 	// 4. 建立节点池对应关系 (Redis)
 	for i, node := range nodes {
 		poolID := pools[i%len(pools)]
@@ -81,32 +121,57 @@ func main() {
 	}
 
 	// 5. 生成历史账单快照 (Daily Snapshots - 过去 7 天)
+	// 按任务场景（namespace + team）维度聚合，体现任务与资源池的不匹配
 	fmt.Println("生成过去 7 天的日级账单快照...")
 	for i := 7; i >= 1; i-- {
 		dateStr := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+
+		// 5.1 先注入任务不匹配的数据（关键场景）
+		for _, mismatch := range taskMismatches {
+			avgUtil := mismatch.AvgUtil
+			if mismatch.Jitter > 0 {
+				// 抖动场景：最近3天抖动明显
+				if i <= 3 {
+					avgUtil = mismatch.AvgUtil
+				} else {
+					avgUtil = mismatch.AvgUtil - 10
+				}
+			}
+			snapshot := &storage.DailyBillingSnapshot{
+				SnapshotDate:    dateStr,
+				PoolID:          mismatch.CurrentPool,
+				Namespace:       mismatch.Namespace,
+				TeamLabel:       mismatch.Team,
+				TotalCost:       500 + r.Float64()*1500,
+				AvgUtilP95:      avgUtil,
+				MaxMemGiB:       8 + r.Float64()*20,
+				PodSessionCount: 3 + r.Intn(8),
+			}
+			mysqlClient.UpsertDailySnapshot(snapshot)
+		}
+
+		// 5.2 注入正常匹配的任务数据（填充其他组合）
 		for _, pool := range pools {
 			for _, ns := range namespaces {
-				avgUtil := 10 + r.Float64()*80
-				// 针对性生成测试数据触发三种算法
-				if pool == "Train-A100-Full-Pool" && ns == "ai-platform" {
-					// 算法1: 降级 - Full池利用率<30%持续3天 (最近3天都是低利用率)
-					if i <= 3 {
-						avgUtil = 15 + r.Float64()*10 // 15-25%
+				// 跳过已经在 taskMismatches 中覆盖的组合
+				covered := false
+				for _, mismatch := range taskMismatches {
+					if mismatch.CurrentPool == pool && mismatch.Namespace == ns {
+						covered = true
+						break
 					}
-				} else if pool == "Train-H800-Full-Pool" && ns == "default" {
-					// 算法3: 特性纠偏 - NVLink池利用率<10%
-					avgUtil = 3 + r.Float64()*5 // 3-8%
-				} else if pool == "Dev-T4-TS-Pool" {
-					// 其他池随机
-					avgUtil = 10 + r.Float64()*80
+				}
+				if covered {
+					continue
 				}
 
+				avgUtil := 30 + r.Float64()*50 // 正常利用率 30-80%
 				snapshot := &storage.DailyBillingSnapshot{
 					SnapshotDate:    dateStr,
 					PoolID:          pool,
 					Namespace:       ns,
 					TeamLabel:       teams[r.Intn(len(teams))],
-					TotalCost:       200 + r.Float64()*1000,
+					TotalCost:       200 + r.Float64()*800,
 					AvgUtilP95:      avgUtil,
 					MaxMemGiB:       4 + r.Float64()*28,
 					PodSessionCount: 5 + r.Intn(20),
@@ -117,41 +182,78 @@ func main() {
 	}
 
 	// 6. 生成历史会话记录 (Stitched LifeTrace)
+	// 生成任务不匹配场景的 Pod 会话
 	fmt.Println("生成已结算的会话明细...")
-	for i := 1; i <= 30; i++ {
+
+	// 6.1 先生成任务不匹配场景的 Pod（体现问题任务）
+	for idx, mismatch := range taskMismatches {
+		for podIdx := 1; podIdx <= 3; podIdx++ { // 每个任务场景生成 3 个 Pod
+			startTime := time.Now().Add(-time.Duration(r.Intn(72)) * time.Hour)
+			endTime := startTime.Add(time.Duration(60+r.Intn(240)) * time.Minute)
+
+			avgUtil := mismatch.AvgUtil
+			maxUtil := avgUtil
+			if mismatch.Jitter > 0 {
+				// 有抖动：max 明显高于 avg
+				maxUtil = avgUtil * (1 + mismatch.Jitter/100)
+			} else {
+				maxUtil = avgUtil + 10 + r.Float64()*15
+			}
+
+			trace := &storage.LifeTrace{
+				PodUID:        fmt.Sprintf("mismatch-%d-%d", idx, podIdx),
+				Namespace:     mismatch.Namespace,
+				PodName:       fmt.Sprintf("%s-worker-%d", mismatch.PodPrefix, podIdx),
+				NodeName:      nodes[r.Intn(len(nodes))],
+				PoolID:        mismatch.CurrentPool,
+				SlicingMode:   getSlicingModeForPool(mismatch.CurrentPool, modes),
+				StartTime:     startTime,
+				EndTime:       &endTime,
+				Status:        "Settled",
+				TeamLabel:     mismatch.Team,
+				GPUUtilAvg:    avgUtil,
+				GPUUtilMax:    maxUtil,
+				MemUsedMax:    uint64(2048 + r.Intn(30000)),
+				PowerUsageAvg: 150 + r.Float64()*100,
+				CostAmount:    20 + r.Float64()*80,
+			}
+			mysqlClient.SaveRawLifeTrace(trace)
+		}
+	}
+
+	// 6.2 生成正常匹配的任务 Pod（填充数据）
+	for i := 1; i <= 20; i++ {
 		ns := namespaces[r.Intn(len(namespaces))]
-		node := nodes[r.Intn(len(nodes))]
 		poolID := pools[r.Intn(len(pools))]
 		team := teams[r.Intn(len(teams))]
 
+		// 跳过已经在 taskMismatches 中覆盖的组合
+		covered := false
+		for _, mismatch := range taskMismatches {
+			if mismatch.CurrentPool == poolID && mismatch.Namespace == ns {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+
+		node := nodes[r.Intn(len(nodes))]
 		startTime := time.Now().Add(-time.Duration(r.Intn(48)) * time.Hour)
 		endTime := startTime.Add(time.Duration(30+r.Intn(300)) * time.Minute)
 
-		// 针对性生成测试数据触发三种算法
-		avgUtil := 10 + r.Float64()*80
+		// 正常利用率
+		avgUtil := 30 + r.Float64()*50
 		maxUtil := avgUtil + r.Float64()*20
-
-		if poolID == "Train-A100-Full-Pool" {
-			// 算法1: 降级 - Full池利用率<30%
-			avgUtil = 15 + r.Float64()*10 // 15-25%
-			maxUtil = avgUtil + 10
-		} else if poolID == "Dev-T4-TS-Pool" {
-			// 算法2: 隔离 - TS池高抖动 (>15%)
-			avgUtil = 40 + r.Float64()*30
-			maxUtil = avgUtil + 20 + r.Float64()*10 // 抖动 > 15%
-		} else if poolID == "Train-H800-Full-Pool" {
-			// 算法3: 特性纠偏 - NVLink池利用率<10%
-			avgUtil = 3 + r.Float64()*5 // 3-8%
-			maxUtil = avgUtil + 5
-		}
 
 		trace := &storage.LifeTrace{
 			PodUID:        fmt.Sprintf("hist-uid-%d", i),
 			Namespace:     ns,
-			PodName:       fmt.Sprintf("offline-job-%03d", i),
+			PodName:       fmt.Sprintf("normal-job-%03d", i),
 			NodeName:      node,
 			PoolID:        poolID,
-			SlicingMode:   string(modes[r.Intn(len(modes))]),
+			SlicingMode:   getSlicingModeForPool(poolID, modes),
 			StartTime:     startTime,
 			EndTime:       &endTime,
 			Status:        "Settled",
@@ -198,9 +300,15 @@ func main() {
 	}
 
 	// 8. 生成 AI 诊断报告 (Phase 3)
+	// 基于任务场景与资源池不匹配的数据生成诊断报告
 	fmt.Println("生成 AI 诊断报告...")
-	reports := []struct {
-		PoolID     string
+
+	// 根据任务不匹配场景生成报告
+	insightReports := []struct {
+		TaskName   string  // 任务名
+		Namespace  string  // 命名空间
+		Team       string  // 负责团队
+		PoolID     string  // 当前资源池
 		ReportType string
 		Summary    string
 		RootCause  string
@@ -208,49 +316,81 @@ func main() {
 		EstSavings float64
 		Status     string
 	}{
+		// 场景1: CV-Team 研发测试任务 - 降级建议
 		{
+			TaskName:   "pytorchjob-cv-train",
+			Namespace:  "ai-platform",
+			Team:       "CV-Team",
 			PoolID:     "Train-A100-Full-Pool",
 			ReportType: "downgrade",
-			Summary:    "资源池 Train-A100-Full-Pool 在过去7天内平均利用率仅为22.5%，存在严重的资源浪费。",
-			RootCause:  "该池子中存在多个低利用率训练任务(利用率15-30%)，占用了高端A100 GPU资源，建议迁移至MPS或TS池。",
-			Actions:    `[{"type":"migrate","pod_name":"offline-job-001","namespace":"ai-platform","from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool"},{"type":"migrate","pod_name":"offline-job-005","namespace":"data-science","from_pool":"Train-A100-Full-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
-			EstSavings: 12500.0,
+			Summary:    "任务 [pytorchjob-cv-train] 平均利用率仅 18.5%，被调度在昂贵的高端训练池。",
+			RootCause:  "该任务无需 NVLink/FP8 特性，应迁移至 Dev-T4-TS-Pool 降低成本。",
+			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-cv-train-worker-1","namespace":"ai-platform","team":"CV-Team","from_pool":"Train-A100-Full-Pool","to_pool":"Dev-T4-TS-Pool"}]`,
+			EstSavings: 8500.0,
 			Status:     "pending",
 		},
+		// 场景2: Search-Algo 推理任务 - 稳定性升级建议（费用增加）
 		{
-			PoolID:     "Infer-A100-MIG-Pool",
-			ReportType: "general",
-			Summary:    "资源池 Infer-A100-MIG-Pool 利用率良好，平均65.5%，运行稳定。",
-			RootCause:  "推理任务资源利用充分，MIG硬隔离效果良好，无需特殊处理。",
-			Actions:    "[]",
-			EstSavings: 0,
-			Status:     "pending",
-		},
-		{
+			TaskName:   "pytorchjob-search-serving",
+			Namespace:  "inference-prod",
+			Team:       "Search-Algo",
 			PoolID:     "Dev-T4-TS-Pool",
 			ReportType: "isolation",
-			Summary:    "资源池 Dev-T4-TS-Pool 中部分任务存在算力抖动，可能受邻居干扰。",
-			RootCause:  "Time-Slicing模式下资源共享导致部分任务性能波动，建议对高优先级任务启用MPS隔离。",
-			Actions:    `[{"type":"pool_change","pod_name":"active-task-003","namespace":"default","from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
-			EstSavings: 2800.0,
-			Status:     "approved",
+			Summary:    "任务 [pytorch 算力抖动job-search-serving]达 22.5%，影响服务质量。",
+			RootCause:  "该任务对延迟敏感，TS 池资源共享导致抖动过大，建议迁移至 Infer-L4-MPS-Pool 以保障 SLA。",
+			Actions:    `[{"type":"pool_change","pod_name":"pytorchjob-search-serving-worker-1","namespace":"inference-prod","team":"Search-Algo","from_pool":"Dev-T4-TS-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
+			EstSavings: -2800.0, // 负数表示费用增加
+			Status:     "pending",
 		},
+		// 场景3: NLP-Group 训练任务 - 特性纠偏建议
 		{
+			TaskName:   "pytorchjob-nlp-sft",
+			Namespace:  "data-science",
+			Team:       "NLP-Group",
 			PoolID:     "Train-H800-Full-Pool",
 			ReportType: "downgrade",
-			Summary:    "上一周期的降级建议已执行，资源利用率提升至45%。",
-			RootCause:  "通过将低利用率任务迁移至低成本池，释放了高端GPU资源。",
+			Summary:    "任务 [pytorchjob-nlp-sft] 利用 NVLink/FP8 特性但利用率仅 12%，造成高端资源浪费。",
+			RootCause:  "该任务无需 NVLink/FP8 高端特性，利用率低于 30% 阈值，建议迁移至 Train-A100-Full-Pool。",
+			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-nlp-sft-worker-1","namespace":"data-science","team":"NLP-Group","from_pool":"Train-H800-Full-Pool","to_pool":"Train-A100-Full-Pool"}]`,
+			EstSavings: 15000.0,
+			Status:     "pending",
+		},
+		// 场景4: CV-Team 批量推理任务 - 优化建议
+		{
+			TaskName:   "pytorchjob-cv-batch-infer",
+			Namespace:  "inference-prod",
+			Team:       "CV-Team",
+			PoolID:     "Infer-A100-MIG-Pool",
+			ReportType: "downgrade",
+			Summary:    "任务 [pytorchjob-cv-batch-infer] 被调度至 MIG 池，吞吐量未充分发挥。",
+			RootCause:  "批量推理对延迟不敏感，MIG 硬隔离单价较高，建议迁移至 Infer-L4-MPS-Pool。",
+			Actions:    `[{"type":"migrate","pod_name":"pytorchjob-cv-batch-infer-worker-1","namespace":"inference-prod","team":"CV-Team","from_pool":"Infer-A100-MIG-Pool","to_pool":"Infer-L4-MPS-Pool"}]`,
+			EstSavings: 4500.0,
+			Status:     "pending",
+		},
+		// 场景5: 已完成的优化（历史报告）
+		{
+			TaskName:   "pytorchjob-historical",
+			Namespace:  "ai-platform",
+			Team:       "NLP-Group",
+			PoolID:     "Train-A100-Full-Pool",
+			ReportType: "downgrade",
+			Summary:    "上一周期的降级建议已执行，资源利用率从 25% 提升至 55%。",
+			RootCause:  "通过将低利用率训练任务迁移至低成本池，释放了高端 GPU 资源。",
 			Actions:    "[]",
-			EstSavings: 8500.0,
+			EstSavings: 9200.0,
 			Status:     "approved",
 		},
 	}
 
 	reportTime := time.Now().AddDate(0, 0, -1)
-	for i, r := range reports {
+	for i, r := range insightReports {
 		generatedAt := reportTime.Add(-time.Duration(i*12) * time.Hour)
 		report := &storage.InsightReport{
 			GeneratedAt: generatedAt,
+			TaskName:    r.TaskName,
+			Namespace:   r.Namespace,
+			Team:        r.Team,
 			PoolID:      r.PoolID,
 			ReportType:  r.ReportType,
 			Summary:     r.Summary,

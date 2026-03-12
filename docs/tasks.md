@@ -85,55 +85,77 @@
 
 ---
 
-## ⚪️ 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [待启动 💤]
+## 🟢 第三阶段：AI 专家诊断与摘要算法 (LLM Insights) - [已完结 ✅]
 
 ### 后端 - LLM 集成层
-- [ ] **创建 `backend/internal/llm/` 模块目录**
-- [ ] **实现数据脱水降维 (`summarizer.go`)**：
-    - [ ] 查询过去 7 天 `daily_billing_snapshot` 数据
-    - [ ] 按池子维度聚合统计特征（平均利用率、峰值、浪费成本）
-    - [ ] 识别低利用率 Pod 列表（< 30%）
-    - [ ] 识别高抖动 Pod 列表（Jitter > 15%）
-- [ ] **实现 AI 诊断引擎 (`analyzer.go`)**：
-    - [ ] 封装 LLM API 调用（支持 Gemini/GPT 配置切换）
-    - [ ] 构建诊断 Prompt 模板
-    - [ ] 解析 LLM 响应为结构化 `InsightReport`
-- [ ] **实现报告存储**：
-    - [ ] 新建 MySQL `insight_reports` 表
-    - [ ] 实现报告持久化与查询 API
+- [x] **创建 `backend/internal/llm/` 模块目录**
+- [x] **实现数据脱水降维 (`summarizer.go`)**：
+    - [x] 查询过去 7 天 `daily_billing_snapshot` 数据
+    - [x] 按任务维度聚合统计特征（平均利用率、峰值、浪费成本）
+    - [x] 识别低利用率 Pod 列表（< 30%）
+    - [x] 识别高抖动 Pod 列表（Jitter > 15%）
+- [x] **实现 AI 诊断引擎 (`analyzer.go`)**：
+    - [x] 封装 LLM API 调用（支持 Gemini/GPT/MiniMax 配置切换）
+    - [x] 构建诊断 Prompt 模板
+    - [x] 解析 LLM 响应为结构化 `InsightReport`
+- [x] **实现报告存储**：
+    - [x] 新建 MySQL `insight_reports` 表（含 task_name, namespace, team 字段）
+    - [x] 实现报告持久化与查询 API
 
 ### 后端 - 管理 API
-- [ ] **注册 `/api/v3/` 路由组**
-- [ ] `POST /api/v3/insights/generate` - 手动触发诊断
-- [ ] `GET /api/v3/insights/reports` - 查询报告列表
-- [ ] `GET /api/v3/insights/reports/:id` - 查询报告详情
-- [ ] `PUT /api/v3/insights/reports/:id/status` - 更新报告状态（审批流）
+- [x] **注册 `/api/v3/` 路由组**
+- [x] `POST /api/v3/insights/generate` - 手动触发诊断
+- [x] `GET /api/v3/insights/reports` - 查询报告列表
+- [x] `GET /api/v3/insights/reports/:id` - 查询报告详情
+- [x] `PUT /api/v3/insights/reports/:id/status` - 更新报告状态（审批流）
 
 ### 前端 - AI 诊断交互
-- [ ] **新增 AI 诊断页面** (`/insights/page.tsx`)：
-    - [ ] "生成诊断报告" 按钮
-    - [ ] 报告列表展示（卡片式）
-    - [ ] 报告详情展开面板
-- [ ] **新增 AI 专家建议卡片组件**：
-    - [ ] 展示治理根因
-    - [ ] 展示预期 ROI（年度节省金额）
-    - [ ] 展示优化 Patch 预览（JSON Diff）
-- [ ] **集成审批流交互**：
-    - [ ] "一键审批" 按钮
-    - [ ] "拒绝" 按钮
-    - [ ] 审批状态实时更新
+- [x] **新增 AI 诊断页面** (`/insights/page.tsx`)：
+    - [x] "生成诊断报告" 按钮
+    - [x] 报告列表展示（卡片式）
+    - [x] 报告详情展开面板
+- [x] **AI 专家建议卡片组件**：
+    - [x] 展示治理根因
+    - [x] 展示预期 ROI（年度节省/增加金额）
+    - [x] 区分降级（节省）vs 稳定性升级（增加）费用显示
+- [x] **集成审批流交互**：
+    - [x] "批准执行" 按钮
+    - [x] "拒绝" 按钮
+    - [x] 审批状态实时更新
+
+### 核心优化
+- [x] **任务视角**：诊断对象从"资源池"转为"任务（Pod/PyTorchJob）"
+- [x] **团队归属**：报告关联团队（team_label）便于责任追踪
+- [x] **费用正负**：降级=节省（正数），稳定性升级=增加（负数）
 
 ### 配置与测试
-- [ ] **配置管理**：在 `configs/config.yaml` 新增 LLM 配置项
-- [ ] **单元测试**：`llm/summarizer_test.go` - 降维算法测试
-- [ ] **集成测试**：`mock_data` 脚本预置低利用率/高抖动测试数据
+- [x] **配置管理**：在 `configs/config.yaml` 新增 LLM 配置项
+- [x] **单元测试**：`llm/summarizer_test.go` - 降维算法测试
+- [x] **集成测试**：`mock_data` 脚本预置任务与资源池不匹配测试数据
 
-## 🔴 第四阶段：可视化看板与闭环治理 (Governance & ROI)
-- [ ] **后端：治理执行器 (Pilot)**：
-    - [ ] 对接 K8s API 执行资源回收、规格微调与跨池迁移。
-- [ ] **前端：治理执行中心与审批流**：
-    - [ ] 实现 **"一键治理"控制台**：支持对 AI 建议进行人工确认/执行。
-    - [ ] 完善 **"治理 ROI 闭环看板"**：量化展示治理后的实际成本节省数据。
+## ⚪️ 第四阶段：可视化看板与闭环治理 (Governance & ROI) - [待启动 💤]
+
+### 后端 - 治理执行器 (Pilot)
+- [ ] 对接 K8s API 实现资源回收、规格微调与跨池迁移
+- [ ] 开发 `backend/internal/pilot/executor.go`：
+    - [ ] 实现 Pod 驱逐（Eviction）逻辑
+    - [ ] 实现跨池迁移 Patch 生成
+    - [ ] 实现资源规格调整（resize）逻辑
+
+### 前端 - 治理执行中心
+- [ ] **治理执行控制台** (`/governance/page.tsx`)：
+    - [ ] 待治理任务列表（来自 AI 诊断报告）
+    - [ ] 一键执行按钮（调用 Pilot API）
+    - [ ] 执行结果反馈
+- [ ] **治理 ROI 闭环看板**：
+    - [ ] 治理前后利用率对比
+    - [ ] 实际成本节省数据
+    - [ ] 治理趋势图
+
+### 验收标准
+- [ ] AI 建议可一键执行
+- [ ] 治理效果可量化追踪
+- [ ] 形成"诊断->审批->执行->验证"闭环
 
 ---
 > [!TIP]

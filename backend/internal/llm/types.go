@@ -45,11 +45,15 @@ type FeatureMismatchPod struct {
 }
 
 // InsightReport AI 诊断报告
+// 核心对象是任务（Pod/PyTorchJob），而非资源池
 type InsightReport struct {
 	ID          string    `json:"id" gorm:"primaryKey"`
 	GeneratedAt time.Time `json:"generated_at" gorm:"column:generated_at"`
-	PoolID      string    `json:"pool_id" gorm:"column:pool_id;index"`
-	ReportType  string    `json:"report_type" gorm:"column:report_type"` // "downgrade", "isolation", "feature_mismatch"
+	TaskName    string    `json:"task_name" gorm:"column:task_name;index"`    // 任务名（Pod名称或PyTorchJob名称）
+	Namespace   string    `json:"namespace" gorm:"column:namespace"`          // 任务所在命名空间
+	Team        string    `json:"team" gorm:"column:team"`                  // 负责团队
+	PoolID      string    `json:"pool_id" gorm:"column:pool_id;index"`       // 任务当前所在的资源池
+	ReportType  string    `json:"report_type" gorm:"column:report_type"`     // "downgrade", "isolation", "feature_mismatch"
 	Summary     string    `json:"summary" gorm:"column:summary;type:text"`
 	RootCause   string    `json:"root_cause" gorm:"column:root_cause;type:text"`
 	Actions     string    `json:"actions" gorm:"column:actions;type:text"` // JSON string

@@ -303,12 +303,15 @@ func main() {
 				return
 			}
 
-			// 转换为 API 响应格式
+			// 转换为 API 响应格式（核心对象是任务）
 			var reportList []llm.InsightReport
 			for _, r := range reports {
 				reportList = append(reportList, llm.InsightReport{
 					ID:          strconv.FormatUint(uint64(r.ID), 10),
 					GeneratedAt: r.GeneratedAt,
+					TaskName:    r.TaskName,
+					Namespace:   r.Namespace,
+					Team:        r.Team,
 					PoolID:      r.PoolID,
 					ReportType:  r.ReportType,
 					Summary:     r.Summary,
@@ -342,6 +345,9 @@ func main() {
 			c.JSON(http.StatusOK, llm.InsightReport{
 				ID:          strconv.FormatUint(uint64(report.ID), 10),
 				GeneratedAt: report.GeneratedAt,
+				TaskName:    report.TaskName,
+				Namespace:   report.Namespace,
+				Team:        report.Team,
 				PoolID:      report.PoolID,
 				ReportType:  report.ReportType,
 				Summary:     report.Summary,
