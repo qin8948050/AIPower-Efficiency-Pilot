@@ -216,17 +216,23 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 	// 3. 提取 GPU 设备信息
 	gpus := c.extractGPUInfo(pod)
 
-	// 4. 构建 Trace 实体
+	// 4. 提取业务归属标签
+	teamLabel := pod.Labels["app.kubernetes.io/team"]
+	projectLabel := pod.Labels["app.kubernetes.io/project"]
+
+	// 5. 构建 Trace 实体
 	trace := &types.PodTrace{
-		Namespace:   pod.Namespace,
-		PodName:     pod.Name,
-		PodUID:      string(pod.UID),
-		NodeName:    pod.Spec.NodeName,
-		PoolID:      poolID,
-		SlicingMode: slicingMode,
-		GPUs:        gpus,
-		StartTime:   pod.CreationTimestamp.Time,
-		Labels:      pod.Labels,
+		Namespace:    pod.Namespace,
+		PodName:      pod.Name,
+		PodUID:       string(pod.UID),
+		NodeName:     pod.Spec.NodeName,
+		PoolID:       poolID,
+		SlicingMode:  slicingMode,
+		GPUs:         gpus,
+		StartTime:    pod.CreationTimestamp.Time,
+		Labels:       pod.Labels,
+		TeamLabel:    teamLabel,
+		ProjectLabel: projectLabel,
 	}
 
 	if err := c.redis.SavePodTrace(trace); err != nil {
