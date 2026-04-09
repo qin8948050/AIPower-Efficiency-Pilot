@@ -101,7 +101,6 @@ func (c *K8sCollector) Start(ctx context.Context) error {
 }
 
 func (c *K8sCollector) handleNode(node *v1.Node) {
-	// 1. 识别 Node 的 PoolID
 	labels := node.GetLabels()
 	poolID, ok := labels["nvidia.com/pool-id"]
 	gpuModel := labels["nvidia.com/gpu.product"]
@@ -115,7 +114,10 @@ func (c *K8sCollector) handleNode(node *v1.Node) {
 		}
 	}
 
-	// 2. 识别硬指标特性 (NVLink, RDMA 等)
+	// 从 PoolID 解析切片配置
+	slicingMode, maxUnits := parsePoolSlicingConfig(poolID, gpuModel, labels)
+
+	// 识别硬指标特性 (NVLink, RDMA 等)
 	var features []string
 	if val, ok := labels["nvidia.com/gpu.family"]; ok && strings.Contains(strings.ToLower(val), "nvlink") {
 		features = append(features, "NVLink")
@@ -123,32 +125,78 @@ func (c *K8sCollector) handleNode(node *v1.Node) {
 	if _, ok := labels["nvidia.com/rdma.capable"]; ok {
 		features = append(features, "RDMA")
 	}
-	// 简单的切分模式感知
-	slicing := "Full"
-	if _, ok := labels["nvidia.com/mig.config"]; ok {
-		slicing = "MIG"
-	} else if _, ok := labels["nvidia.com/mps.capable"]; ok {
-		slicing = "MPS"
-	}
 
-	// 3. 保存至 Redis (实时调度感知)
+	// 保存至 Redis (实时调度感知)
 	if err := c.redis.SaveNodePoolID(node.Name, poolID); err != nil {
 		log.Printf("Failed to save node pool info for %s: %v", node.Name, err)
 	}
 
-	// 4. 自动注册资产存根至 MySQL (资产管理)
+	// 自动注册资产存根至 MySQL (资产管理)
 	poolAsset := &storage.ResourcePool{
-		ID:               poolID,
-		Name:             poolID, // 默认名与 ID 一致，待管理员修改
-		GPUModel:         gpuModel,
+		ID:              poolID,
+		Name:            poolID,
+		GPUModel:        gpuModel,
+		GPUVendor:       "nvidia", // 默认值，后续可扩展
 		HardwareFeatures: strings.Join(features, ","),
-		SlicingMode:      slicing,
+		SlicingMode:     slicingMode,
+		MaxSlicingUnits: maxUnits,
 	}
 	if err := c.mysql.UpsertResourcePool(poolAsset); err != nil {
 		log.Printf("Failed to auto-register pool asset %s: %v", poolID, err)
 	} else {
-		log.Printf("Asset Synced: Pool %s (Model: %s, Features: %v)", poolID, gpuModel, features)
+		log.Printf("Asset Synced: Pool %s (Model: %s, Mode: %s, MaxUnits: %d)",
+			poolID, gpuModel, slicingMode, maxUnits)
 	}
+}
+
+// parsePoolSlicingConfig 从池子 ID 和节点标签解析切片配置
+// 命名规范: pool-{mode}-{vendor}-{spec}
+// 例如: pool-full-A100, pool-mig-A100-2g, pool-ts-T4-30
+func parsePoolSlicingConfig(poolID, gpuModel string, nodeLabels map[string]string) (mode string, maxUnits int) {
+	// 优先从节点标签判断
+	if _, ok := nodeLabels["nvidia.com/mig.config"]; ok {
+		return "MIG", getDefaultMIGUnits(gpuModel)
+	}
+	if _, ok := nodeLabels["nvidia.com/mps.capable"]; ok {
+		return "MPS", 100 // MPS 按百分比
+	}
+
+	// 从 PoolID 解析
+	// 格式: pool-{mode}-{vendor}-{spec}
+	// 例如: pool-full-A100, pool-mig-A100-2g, pool-ts-T4-30
+	parts := strings.Split(poolID, "-")
+	if len(parts) < 2 {
+		return "Full", 1
+	}
+
+	modePart := parts[1]
+	switch modePart {
+	case "full":
+		return "Full", 1
+	case "mig":
+		// pool-mig-A100-2g → MIG 模式，A100 最大 7 个 MIG 实例
+		return "MIG", getDefaultMIGUnits(gpuModel)
+	case "mps":
+		return "MPS", 100
+	case "ts":
+		return "TS", 100
+	}
+
+	return "Full", 1
+}
+
+// getDefaultMIGUnits 获取 GPU 型号对应的最大 MIG 实例数
+func getDefaultMIGUnits(gpuModel string) int {
+	defaults := map[string]int{
+		"NVIDIA A100-SXM4-80GB": 7,
+		"NVIDIA A100-SXM4-40GB": 7,
+		"NVIDIA H100-SXM5-80GB": 7,
+	}
+	if v, ok := defaults[gpuModel]; ok {
+		return v
+	}
+	// 未知型号，默认返回 1
+	return 1
 }
 
 func (c *K8sCollector) handlePodAdd(pod *v1.Pod) {
@@ -175,7 +223,12 @@ func (c *K8sCollector) handlePodDelete(pod *v1.Pod) {
 	}
 
 	// 2. 关闭 MySQL 审计记录 (Life-Trace)
-	if err := c.mysql.CloseLifeTrace(pod.Namespace, pod.Name); err != nil {
+	// 使用 Pod 的实际删除时间 (DeletionTimestamp)，而非当前时间
+	endTime := time.Now()
+	if pod.DeletionTimestamp != nil && !pod.DeletionTimestamp.IsZero() {
+		endTime = pod.DeletionTimestamp.Time
+	}
+	if err := c.mysql.CloseLifeTrace(pod.Namespace, pod.Name, endTime); err != nil {
 		log.Printf("Failed to close MySQL life-trace for %s/%s: %v", pod.Namespace, pod.Name, err)
 	}
 }
@@ -210,42 +263,128 @@ func (c *K8sCollector) processPod(pod *v1.Pod) {
 		}
 	}
 
-	// 2. 识别切分模式
-	slicingMode := c.detectSlicingMode(pod)
+	// 2. 获取池子切片配置
+	nodePool, err := c.mysql.GetResourcePool(poolID)
+	if err != nil || nodePool == nil {
+		// fallback: 默认配置
+		nodePool = &storage.ResourcePool{
+			SlicingMode:     "Full",
+			MaxSlicingUnits: 1,
+		}
+	}
 
-	// 3. 提取 GPU 设备信息
+	// 3. 计算 Pod 申请的切片单元数和权重
+	slicingUnits := countSlicingUnits(pod, nodePool.SlicingMode)
+	slicingWeight := 1.0
+	if nodePool.MaxSlicingUnits > 0 {
+		slicingWeight = float64(slicingUnits) / float64(nodePool.MaxSlicingUnits)
+	}
+
+	// 4. 提取 GPU 设备信息
 	gpus := c.extractGPUInfo(pod)
 
-	// 4. 提取业务归属标签
+	// 5. 提取业务归属标签
 	teamLabel := pod.Labels["app.kubernetes.io/team"]
 	projectLabel := pod.Labels["app.kubernetes.io/project"]
 
-	// 5. 构建 Trace 实体
+	// 6. 构建 Trace 实体
 	trace := &types.PodTrace{
-		Namespace:    pod.Namespace,
-		PodName:      pod.Name,
-		PodUID:       string(pod.UID),
-		NodeName:     pod.Spec.NodeName,
-		PoolID:       poolID,
-		SlicingMode:  slicingMode,
-		GPUs:         gpus,
-		StartTime:    pod.CreationTimestamp.Time,
-		Labels:       pod.Labels,
-		TeamLabel:    teamLabel,
-		ProjectLabel: projectLabel,
+		Namespace:     pod.Namespace,
+		PodName:       pod.Name,
+		PodUID:        string(pod.UID),
+		NodeName:      pod.Spec.NodeName,
+		PoolID:        poolID,
+		SlicingMode:   types.SlicingMode(nodePool.SlicingMode),
+		SlicingUnits:  slicingUnits,
+		SlicingWeight: slicingWeight,
+		GPUs:          gpus,
+		StartTime:     pod.CreationTimestamp.Time,
+		Labels:        pod.Labels,
+		TeamLabel:     teamLabel,
+		ProjectLabel:  projectLabel,
 	}
 
 	if err := c.redis.SavePodTrace(trace); err != nil {
 		log.Printf("Error caching Pod Trace %s/%s: %v", trace.Namespace, trace.PodName, err)
 	} else {
-		log.Printf("Pod %s/%s scheduled on %s (%s, Mode: %s, GPUs: %v)",
-			trace.Namespace, trace.PodName, trace.NodeName, trace.PoolID, trace.SlicingMode, trace.GPUs)
+		log.Printf("Pod %s/%s scheduled on %s (Pool: %s, Mode: %s, Units: %d, Weight: %.3f, GPUs: %v)",
+			trace.Namespace, trace.PodName, trace.NodeName, trace.PoolID,
+			trace.SlicingMode, slicingUnits, slicingWeight, trace.GPUs)
 	}
 
-	// 4. 持久化 MySQL 审计记录 (Life-Trace)
+	// 7. 持久化 MySQL 审计记录 (Life-Trace)
 	if err := c.mysql.SaveLifeTrace(trace); err != nil {
 		log.Printf("Failed to save MySQL life-trace for %s/%s: %v", trace.Namespace, trace.PodName, err)
 	}
+}
+
+// countSlicingUnits 统计 Pod 申请的切片单元数
+func countSlicingUnits(pod *v1.Pod, mode string) int {
+	switch mode {
+	case "Full":
+		// 整卡：请求 nvidia.com/gpu=1 表示使用 1 张卡
+		for _, c := range pod.Spec.Containers {
+			for resName, qty := range c.Resources.Limits {
+				if string(resName) == "nvidia.com/gpu" {
+					return int(qty.Value())
+				}
+			}
+		}
+		return 1
+
+	case "MIG":
+		// MIG：统计 nvidia.com/mig-* 资源请求总和
+		var total int64
+		for _, c := range pod.Spec.Containers {
+			for resName, qty := range c.Resources.Limits {
+				if strings.HasPrefix(string(resName), "nvidia.com/mig-") {
+					total += qty.Value()
+				}
+			}
+		}
+		if total == 0 {
+			return 1 // 默认申请 1 个
+		}
+		return int(total)
+
+	case "MPS":
+		// MPS：从环境变量获取百分比（可能是 "50" 或 "50%"）
+		for _, c := range pod.Spec.Containers {
+			for _, env := range c.Env {
+				if env.Name == "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE" {
+					pct := stripNonDigits(env.Value)
+					if pct > 0 {
+						return pct
+					}
+				}
+			}
+		}
+		return 50 // 默认 50%
+
+	case "TS":
+		// TS/vGPU：从注解获取百分比（可能是 "30" 或 "30%"）
+		if pctStr, ok := pod.Annotations["nvidia.com/gpu-percentage"]; ok {
+			pct := stripNonDigits(pctStr)
+			if pct > 0 {
+				return pct
+			}
+		}
+		return 100 // 默认 100%
+	}
+
+	return 1
+}
+
+// stripNonDigits 去除字符串中的非数字字符，返回整数
+// 例如: "30%" -> 30, "50" -> 50, "100%" -> 100
+func stripNonDigits(s string) int {
+	var result int
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			result = result*10 + int(c-'0')
+		}
+	}
+	return result
 }
 
 // extractGPUInfo 提取分配给 Pod 的 GPU 标识
@@ -268,30 +407,4 @@ func (c *K8sCollector) extractGPUInfo(pod *v1.Pod) []string {
 		gpus = append(gpus, strings.Split(val, ",")...)
 	}
 	return gpus
-}
-
-// detectSlicingMode 基于资源申请和环境变量探测虚拟化模式
-func (c *K8sCollector) detectSlicingMode(pod *v1.Pod) types.SlicingMode {
-	for _, container := range pod.Spec.Containers {
-		// 1. MIG 探测 (通过资源名)
-		for resName := range container.Resources.Limits {
-			if strings.HasPrefix(string(resName), "nvidia.com/mig-") {
-				return types.SlicingModeMIG
-			}
-		}
-		// 2. MPS 探测 (通过环境变量)
-		for _, env := range container.Env {
-			if env.Name == "CUDA_MPS_PIPE_DIRECTORY" || env.Name == "NVIDIA_MPS_COPY_THRESHOLD" {
-				return types.SlicingModeMPS
-			}
-		}
-		// 3. TS (Time Slicing/vGPU) 探测
-		for resName := range container.Resources.Limits {
-			rn := string(resName)
-			if strings.Contains(rn, "vcuda") || strings.Contains(rn, "gpu-core") || strings.Contains(rn, "gpu-percentage") {
-				return types.SlicingModeTS
-			}
-		}
-	}
-	return types.SlicingModeFull
 }

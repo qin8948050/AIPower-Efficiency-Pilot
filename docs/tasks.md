@@ -185,5 +185,47 @@
 - [x] 执行状态可追踪
 
 ---
+
+## 🟢 第二阶段增强：动态切片权重 (Dynamic Slicing Weight) - [已完成]
+
+### 背景
+原设计中切片权重是固定值（如 MIG=0.35），无法准确反映 Pod 实际申请的切片量。改进后权重由 `Pod申请量 / 单卡最大量` 动态计算。
+
+### 后端改动
+
+#### 数据模型增强
+- [x] `life_trace` 表新增 `slicing_units` (Pod 申请的切片单元数)
+- [x] `life_trace` 表新增 `slicing_weight` (动态计算的权重)
+- [x] `resource_pool` 表新增 `gpu_vendor` (GPU 厂商)
+- [x] `resource_pool` 表新增 `max_slicing_units` (单卡最大切片单元数)
+
+#### 切片检测逻辑
+- [x] `parsePoolSlicingConfig()` - 从池子名称解析切片配置
+- [x] `countSlicingUnits()` - 统计 Pod 申请的切片单元数
+  - Full: 统计 `nvidia.com/gpu` 请求量
+  - MIG: 统计 `nvidia.com/mig-*` 请求总和
+  - MPS: 从 `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` 环境变量获取
+  - TS: 从 `nvidia.com/gpu-percentage` 注解获取
+- [x] `getDefaultMIGUnits()` - GPU 型号 → 最大 MIG 实例数映射表
+
+#### Prometheus 采集增强
+- [x] `detectSafeQueryTime()` - 动态检测 Prometheus 延迟，避免数据未就绪
+- [x] 使用 `avg_over_time[5m]` 替代即时查询，服务端聚合
+
+#### 计费引擎改动
+- [x] `CalculateCost()` 改用动态 `slicing_weight` 参数
+
+#### 后台调度增强
+- [x] 修复每日 01:00 聚合逻辑，使用 Timer 精确等待
+
+### 前端改动
+- [ ] 暂无前端改动
+
+### 文档更新
+- [x] 更新 `perception_and_tagging_logic.md` - 切片配置与权重计算
+- [x] 更新 `billing_and_aggregation_logic.md` - 动态权重计费公式
+- [x] 更新 `resource_pool_management_logic.md` - 池子命名规范和 MaxSlicingUnits
+
+---
 > [!TIP]
 > 任务状态更新规则：`[ ]` 待启动, `[/]` 进行中, `[x]` 已完成。

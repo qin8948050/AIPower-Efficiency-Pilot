@@ -10,31 +10,29 @@
 ## 步骤一：会话级指标缝合 (Session Metrics Stitching)
 
 *   **是什么：** 在 T+1 阶段，将 Phase 1 记录的 Pod 生命周期窗口，与 Prometheus 中的历史时序指标进行异步关联与核算。
-*   **为什么：** 
+*   **为什么：**
     - Pod 销毁后 Prometheus 标签立刻失效，无法实时回查。
     - 离线缝合可以做到 100% 的指标覆盖率，且不影响生产链路。
 *   **实现逻辑：**
     1.  **查找待缝合记录：** 定时扫描 MySQL `life_trace` 表，过滤出 `end_time IS NOT NULL AND gpu_util_avg = 0`（已结束但未缝合）的记录。
     2.  **业务归属提取（Phase 1 增补）：** Collector 在感知 Pod 启动时，同步提取 Pod Labels 中的 `app.kubernetes.io/team` 和 `app.kubernetes.io/project`，写入 `life_trace.team_label` / `project_label`，作为业务维度下钻的锚点。
-    3.  **时序回溯查询：** 以 `life_trace.start_time` ~ `end_time` 为区间，向 Prometheus 发起 `range_query`，查询：
-        - `DCGM_FI_DEV_GPU_UTIL`：算力利用率
-        - `DCGM_FI_DEV_FB_USED`：显存用量 (MiB)
-        - `DCGM_FI_DEV_POWER_USAGE`：功耗 (W)
-    3.  **聚合计算：** 计算窗口内的 `Avg`（均值）、`Max`（峰值），得到：
-        - `gpu_util_avg`, `gpu_util_max`
-        - `mem_used_max`
-        - `power_usage_avg`
-    4.  **持久化回填：** 调用 `UpdateLifeTraceMetrics` 将结果写回 MySQL `life_trace` 表对应记录。
+    3.  **时序回溯查询：** 以 `life_trace.start_time` ~ `end_time` 为区间，向 Prometheus 发起聚合查询：
+        - `avg_over_time(DCGM_FI_DEV_GPU_UTIL[duration])`：算力利用率均值
+        - `max_over_time(DCGM_FI_DEV_GPU_UTIL[duration])`：算力利用率峰值
+        - `max_over_time(DCGM_FI_DEV_FB_USED[duration])`：显存峰值
+        - `avg_over_time(DCGM_FI_DEV_POWER_USAGE[duration])`：功耗均值
+    4.  **聚合计算：** 使用 PromQL 服务端聚合函数直接计算 Avg、Max，无需传输原始数据。
+    5.  **持久化回填：** 调用 `UpdateLifeTraceMetrics` 将结果写回 MySQL `life_trace` 表对应记录。
 *   **效果：** 每一条 `life_trace` 记录从"只有时间戳"进化为"带有完整指标的计费凭据"。
 
 ---
 
 ## 步骤二：资源池定价引擎 (Pricing Engine)
 
-*   **是什么：** 一套基于"资源池类型"和"虚拟化模式"双维度的弹性定价模型。
-*   **为什么：** 
+*   **是什么：** 一套基于"资源池类型"和"实际切片申请"双维度的弹性定价模型。
+*   **为什么：**
     - 不同型号 GPU（V100, A100, H800）采购成本差异悬殊，不能用统一单价计费。
-    - 同一块 GPU 使用 MIG 切割后，不同切片大小的计费权重也应不同（非线性分摊）。
+    - 切片权重应由 Pod 实际申请量动态计算，而非固定模式值，确保公平精确。
 *   **数据模型 (`pool_pricing` 表)：**
 
     | 字段名 | 类型 | 说明 |
@@ -42,15 +40,27 @@
     | `pool_id` | VARCHAR | 资源池 ID（主键关联 `life_trace`）|
     | `gpu_model` | VARCHAR | GPU 型号（V100/A100/H800）|
     | `base_price_per_hour` | DECIMAL | 基准小时单价（元/小时）|
-    | `slicing_weights` | JSON | 各切片模式的权重系数 `{"Full":1.0, "MIG":0.35, "MPS":0.5, "TS":0.6}` |
+    | `slicing_weight_full` | FLOAT | Full 模式权重（默认 1.0）|
+    | `slicing_weight_mig` | FLOAT | MIG 模式权重（已废弃，改用动态计算）|
+    | `slicing_weight_mps` | FLOAT | MPS 模式权重（已废弃）|
+    | `slicing_weight_ts` | FLOAT | TS 模式权重（已废弃）|
 
 *   **计费公式：**
     ```
     计费时长 (H)   = (end_time - start_time) / 3600
-    切片权重        = pool_pricing.slicing_weights[life_trace.slicing_mode]
+    切片权重        = life_trace.slicing_weight  (Pod申请量 / 单卡最大量)
     成本 (元)       = 计费时长 × base_price_per_hour × 切片权重
     ```
 *   **效果：** 为每一条 `life_trace` 写入 `cost_amount` 字段，产出精确到秒的成本凭据。
+
+**动态权重计算示例：**
+
+| 场景 | Pod 申请 | 池子配置 | 权重计算 |
+|------|---------|---------|---------|
+| Full GPU | 1 张卡 | max=1 | 1/1 = 1.0 |
+| MIG 切片 | 2 个 MIG 实例 | max=7 (A100) | 2/7 ≈ 0.286 |
+| MPS | 50% | max=100 | 50/100 = 0.5 |
+| TS | 30% | max=100 | 30/100 = 0.3 |
 
 ---
 

@@ -48,11 +48,27 @@ func main() {
 	// 3. 启动后台任务 (Stitcher & Daily Aggregation)
 	go func() {
 		log.Println("[worker] Background tasks started")
+
+		// Stitcher: 每 10 分钟执行一次
 		stitchTicker := time.NewTicker(10 * time.Minute)
-		// 每天 01:00 执行聚合，这里简单起见每小时检查一次
-		dailyCheckTicker := time.NewTicker(1 * time.Hour)
 		defer stitchTicker.Stop()
-		defer dailyCheckTicker.Stop()
+
+		// Daily Aggregation: 每天 01:00 执行
+		// 计算距离下次 1 点的等待时间
+		now := time.Now()
+		next1AM := time.Date(now.Year(), now.Month(), now.Day(), 1, 0, 0, 0, now.Location())
+		if now.Hour() >= 1 {
+			next1AM = next1AM.Add(24 * time.Hour)
+		}
+		firstWait := next1AM.Sub(now)
+		log.Printf("[worker] First daily aggregation at %s (in %v)", next1AM.Format("15:04:05"), firstWait)
+
+		// 使用 Timer 等待第一次执行
+		dailyTimer := time.NewTimer(firstWait)
+		// 之后每 24 小时执行一次
+		dailyTicker := time.NewTicker(24 * time.Hour)
+		defer dailyTimer.Stop()
+		defer dailyTicker.Stop()
 
 		for {
 			select {
@@ -61,15 +77,19 @@ func main() {
 				if err := aggregator.RunStitcher(mysqlCli, 50); err != nil {
 					log.Printf("[worker] Stitcher error: %v", err)
 				}
-			case <-dailyCheckTicker.C:
-				now := time.Now()
-				if now.Hour() == 1 {
-					log.Println("[worker] Running daily aggregation...")
-					// 聚合前一天的数据
-					yesterday := now.Add(-24 * time.Hour)
-					if err := aggregator.RunDailyAggregation(mysqlCli, yesterday); err != nil {
-						log.Printf("[worker] Daily aggregation error: %v", err)
-					}
+			case <-dailyTimer.C:
+				log.Println("[worker] Running daily aggregation...")
+				yesterday := time.Now().Add(-24 * time.Hour)
+				if err := aggregator.RunDailyAggregation(mysqlCli, yesterday); err != nil {
+					log.Printf("[worker] Daily aggregation error: %v", err)
+				}
+				// 切换到 Ticker 模式
+				log.Println("[worker] Daily aggregation completed, next run in 24h")
+			case <-dailyTicker.C:
+				log.Println("[worker] Running daily aggregation...")
+				yesterday := time.Now().Add(-24 * time.Hour)
+				if err := aggregator.RunDailyAggregation(mysqlCli, yesterday); err != nil {
+					log.Printf("[worker] Daily aggregation error: %v", err)
 				}
 			}
 		}

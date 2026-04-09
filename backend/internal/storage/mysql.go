@@ -18,6 +18,8 @@ type LifeTrace struct {
 	NodeName    string     `gorm:"column:node_name;type:varchar(128);not null"`
 	PoolID      string     `gorm:"column:pool_id;type:varchar(128);not null"`
 	SlicingMode string     `gorm:"column:slicing_mode;type:varchar(32);not null"`
+	SlicingUnits  int     `gorm:"column:slicing_units;type:int;default:1"`     // Pod 申请的切片单元数
+	SlicingWeight float64 `gorm:"column:slicing_weight;type:float;default:1.0"` // 权重 = SlicingUnits / MaxSlicingUnits
 	StartTime   time.Time  `gorm:"column:start_time;type:datetime;not null;index:idx_time"`
 	EndTime     *time.Time `gorm:"column:end_time;type:datetime"`
 	// 状态: Running, Auditing, Settled
@@ -105,12 +107,14 @@ func NewMySQLClient(dsn string) (*MySQLClient, error) {
 type ResourcePool struct {
 	ID               string    `gorm:"column:pool_id;type:varchar(128);primaryKey"`
 	Name             string    `gorm:"column:name;type:varchar(128);not null"`
-	Scene            string    `gorm:"column:scene;type:varchar(64)"` // 预训练、推理、研发等
-	GPUModel         string    `gorm:"column:gpu_model;type:varchar(64)"`
-	HardwareFeatures string    `gorm:"column:hardware_features;type:varchar(255)"` // NVLink, RDMA 等
-	SlicingMode      string    `gorm:"column:slicing_mode;type:varchar(32)"`      // Full, MIG, MPS, TS
-	PricingLogic     string    `gorm:"column:pricing_logic;type:varchar(64)"`     // Reserved, Spot 等
-	Priority         string    `gorm:"column:priority;type:varchar(32)"`          // High, Low
+	Scene            string    `gorm:"column:scene;type:varchar(64)"`                 // 预训练、推理、研发等
+	GPUModel         string    `gorm:"column:gpu_model;type:varchar(64)"`             // GPU 型号
+	GPUVendor        string    `gorm:"column:gpu_vendor;type:varchar(32)"`            // 厂商: nvidia, intel, amd
+	HardwareFeatures string    `gorm:"column:hardware_features;type:varchar(255)"`     // NVLink, RDMA 等
+	SlicingMode      string    `gorm:"column:slicing_mode;type:varchar(32)"`         // Full, MIG, MPS, TS
+	MaxSlicingUnits  int       `gorm:"column:max_slicing_units;type:int;default:1"`  // 单卡最大切片单元数
+	PricingLogic     string    `gorm:"column:pricing_logic;type:varchar(64)"`        // Reserved, Spot 等
+	Priority         string    `gorm:"column:priority;type:varchar(32)"`             // High, Low
 	Description      string    `gorm:"column:description;type:text"`
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -122,13 +126,15 @@ func (m *MySQLClient) InitSchema() error {
 	return m.db.AutoMigrate(&LifeTrace{}, &PoolPricing{}, &DailyBillingSnapshot{}, &ResourcePool{}, &InsightReport{}, &GovernanceExecution{})
 }
 
-// UpsertResourcePool 发现新池子时自动创建或更新硬指标 (型号、特性、模式)
+// UpsertResourcePool 发现新池子时自动创建或更新硬指标 (型号、特性、切片配置)
 func (m *MySQLClient) UpsertResourcePool(p *ResourcePool) error {
 	return m.db.Where(ResourcePool{ID: p.ID}).
 		Assign(ResourcePool{
-			GPUModel:         p.GPUModel,
+			GPUModel:        p.GPUModel,
+			GPUVendor:       p.GPUVendor,
 			HardwareFeatures: p.HardwareFeatures,
-			SlicingMode:      p.SlicingMode,
+			SlicingMode:     p.SlicingMode,
+			MaxSlicingUnits: p.MaxSlicingUnits,
 		}).
 		FirstOrCreate(p).Error
 }
@@ -223,14 +229,15 @@ func (m *MySQLClient) SaveLifeTrace(trace *types.PodTrace) error {
 		FirstOrCreate(lt).Error
 }
 
-func (m *MySQLClient) CloseLifeTrace(namespace, podName string) error {
-	now := time.Now()
+// CloseLifeTrace 关闭指定 Pod 的生命周期记录
+// endTime 应传入 Pod 的实际删除时间（pod.DeletionTimestamp），避免使用当前时间导致误差
+func (m *MySQLClient) CloseLifeTrace(namespace, podName string, endTime time.Time) error {
 	return m.db.Model(&LifeTrace{}).
 		Where("namespace = ? AND pod_name = ? AND end_time IS NULL", namespace, podName).
 		Order("start_time DESC").
 		Limit(1).
 		Updates(map[string]interface{}{
-			"end_time": &now,
+			"end_time": endTime,
 			"status":   "Auditing",
 		}).Error
 }

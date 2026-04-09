@@ -35,7 +35,7 @@ func main() {
 	if len(traces) == 0 {
 		// 兜底：创建一条用于演示的关闭记录
 		fmt.Println("   未找到待缝合记录，先模拟关闭一条 Pod 记录...")
-		_ = mysqlClient.CloseLifeTrace("default", "ai-task-001")
+		_ = mysqlClient.CloseLifeTrace("default", "ai-task-001", time.Now())
 		traces, _ = mysqlClient.GetPendingMetricsTraces(10)
 	}
 

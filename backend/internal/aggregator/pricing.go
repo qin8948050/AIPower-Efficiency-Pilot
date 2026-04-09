@@ -23,13 +23,13 @@ func SlicingWeightOf(pricing storage.PoolPricing, slicingMode string) float64 {
 
 // CalculateCost 根据会话时长、池子单价与切片权重计算成本
 // cost = durationHours × basePricePerHour × slicingWeight
-func CalculateCost(startTime, endTime time.Time, pricing storage.PoolPricing, slicingMode string) float64 {
+// slicingWeight 由调用方（stitcher）根据 Pod 申请的切片单元数和池子最大切片单元数计算
+func CalculateCost(startTime, endTime time.Time, pricing storage.PoolPricing, slicingWeight float64) float64 {
 	durationH := endTime.Sub(startTime).Hours()
 	if durationH < 0 {
 		durationH = 0
 	}
-	weight := SlicingWeightOf(pricing, slicingMode)
-	return durationH * pricing.BasePricePerHour * weight
+	return durationH * pricing.BasePricePerHour * slicingWeight
 }
 
 // DefaultPricing 返回一个预置的默认定价配置（用于无真实 DB 数据时的 Fallback）

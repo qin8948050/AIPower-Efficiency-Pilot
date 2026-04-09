@@ -14,76 +14,63 @@ import (
 
 // MetricsSample 单个指标样本
 type MetricsSample struct {
-	AvgUtil    float64
-	MaxUtil    float64
-	MaxMemMiB  uint64
-	AvgPowerW  float64
+	AvgUtil   float64
+	MaxUtil   float64
+	MaxMemMiB uint64
+	AvgPowerW float64
 }
 
-// StitchFromPrometheus 向 Prometheus 发起时间窗口 range_query，计算聚合指标
+// StitchFromPrometheus 向 Prometheus 发起聚合查询，计算时间窗口内的指标
+// 使用 PromQL 服务端聚合函数，无需传输原始数据
 func StitchFromPrometheus(api v1.API, gpuUUID string, start, end time.Time) (*MetricsSample, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	step := 5 * time.Minute
-	r := v1.Range{Start: start, End: end, Step: step}
-
-	// 查询 GPU 利用率
-	utilQuery := fmt.Sprintf(`DCGM_FI_DEV_GPU_UTIL{uuid="%s"}`, gpuUUID)
-	utilResult, warnings, err := api.QueryRange(ctx, utilQuery, r)
-	if err != nil {
-		return nil, fmt.Errorf("prometheus util query failed: %w", err)
-	}
-	if len(warnings) > 0 {
-		log.Printf("[stitcher] warnings: %v", warnings)
+	duration := end.Sub(start)
+	if duration <= 0 {
+		return nil, fmt.Errorf("invalid time range: start=%v, end=%v", start, end)
 	}
 
 	sample := &MetricsSample{}
-	if matrix, ok := utilResult.(model.Matrix); ok && len(matrix) > 0 {
-		var sum float64
-		var maxVal float64
-		vals := matrix[0].Values
-		for _, v := range vals {
-			f := float64(v.Value)
-			sum += f
-			if f > maxVal {
-				maxVal = f
-			}
-		}
-		if len(vals) > 0 {
-			sample.AvgUtil = sum / float64(len(vals))
-		}
-		sample.MaxUtil = maxVal
+
+	// GPU 利用率：平均值和峰值
+	avgUtilQuery := fmt.Sprintf(`avg_over_time(DCGM_FI_DEV_GPU_UTIL{uuid="%s"}[%s])`, gpuUUID, duration)
+	if val, err := queryFloat(api, ctx, avgUtilQuery, end); err == nil {
+		sample.AvgUtil = val
+	} else {
+		log.Printf("[stitcher] avg_util query failed for %s: %v", gpuUUID, err)
 	}
 
-	// 查询显存使用
-	memQuery := fmt.Sprintf(`DCGM_FI_DEV_FB_USED{uuid="%s"}`, gpuUUID)
-	memResult, _, _ := api.QueryRange(ctx, memQuery, r)
-	if matrix, ok := memResult.(model.Matrix); ok && len(matrix) > 0 {
-		var maxMem float64
-		for _, v := range matrix[0].Values {
-			if float64(v.Value) > maxMem {
-				maxMem = float64(v.Value)
-			}
-		}
-		sample.MaxMemMiB = uint64(maxMem)
+	maxUtilQuery := fmt.Sprintf(`max_over_time(DCGM_FI_DEV_GPU_UTIL{uuid="%s"}[%s])`, gpuUUID, duration)
+	if val, err := queryFloat(api, ctx, maxUtilQuery, end); err == nil {
+		sample.MaxUtil = val
 	}
 
-	// 查询功耗
-	powerQuery := fmt.Sprintf(`DCGM_FI_DEV_POWER_USAGE{uuid="%s"}`, gpuUUID)
-	powerResult, _, _ := api.QueryRange(ctx, powerQuery, r)
-	if matrix, ok := powerResult.(model.Matrix); ok && len(matrix) > 0 {
-		var sumPower float64
-		vals := matrix[0].Values
-		for _, v := range vals {
-			sumPower += float64(v.Value)
-		}
-		if len(vals) > 0 {
-			sample.AvgPowerW = sumPower / float64(len(vals))
-		}
+	// 显存使用峰值
+	memQuery := fmt.Sprintf(`max_over_time(DCGM_FI_DEV_FB_USED{uuid="%s"}[%s])`, gpuUUID, duration)
+	if val, err := queryFloat(api, ctx, memQuery, end); err == nil {
+		sample.MaxMemMiB = uint64(val)
+	}
+
+	// 功耗平均值
+	powerQuery := fmt.Sprintf(`avg_over_time(DCGM_FI_DEV_POWER_USAGE{uuid="%s"}[%s])`, gpuUUID, duration)
+	if val, err := queryFloat(api, ctx, powerQuery, end); err == nil {
+		sample.AvgPowerW = val
 	}
 
 	return sample, nil
+}
+
+// queryFloat 向 Prometheus 执行即时查询，返回 float64 值
+func queryFloat(api v1.API, ctx context.Context, query string, ts time.Time) (float64, error) {
+	result, _, err := api.Query(ctx, query, ts)
+	if err != nil {
+		return 0, err
+	}
+	if vec, ok := result.(model.Vector); ok && len(vec) > 0 {
+		return float64(vec[0].Value), nil
+	}
+	return 0, fmt.Errorf("no data returned for query: %s", query)
 }
 
 // P95 计算一组 float64 的 P95 值
@@ -114,10 +101,8 @@ func RunStitcher(db *storage.MySQLClient, limit int) error {
 
 	log.Printf("[stitcher] 发现 %d 条待缝合记录", len(traces))
 	for _, trace := range traces {
-		endTime := time.Now()
-		if trace.EndTime != nil {
-			endTime = *trace.EndTime
-		}
+
+		endTime := *trace.EndTime
 
 		// 获取定价
 		pricing := GetPoolPricing(db, trace.PoolID)
@@ -125,7 +110,8 @@ func RunStitcher(db *storage.MySQLClient, limit int) error {
 		// TODO: 真实环境替换为 StitchFromPrometheus(api, gpuUUID, trace.StartTime, endTime)
 		// 此处使用模拟数据
 		sample := simulateSample()
-		cost := CalculateCost(trace.StartTime, endTime, pricing, trace.SlicingMode)
+		// 使用 Pod 创建时记录的 SlicingWeight 直接计算成本
+		cost := CalculateCost(trace.StartTime, endTime, pricing, trace.SlicingWeight)
 
 		if err := db.UpdateLifeTraceMetrics(trace.ID, sample.AvgUtil, sample.MaxUtil, sample.MaxMemMiB, sample.AvgPowerW, cost); err != nil {
 			log.Printf("[stitcher] 缝合失败 id=%d: %v", trace.ID, err)
